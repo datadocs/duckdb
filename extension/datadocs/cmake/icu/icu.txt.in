@@ -1,0 +1,24 @@
+# ICU Repository External Project template
+#
+# To use, add the following in your CMakefile.txt
+#
+# fetch_dependency(icu "cmake/icu/icu.txt.in")
+# target_include_directories(<your_target> PRIVATE $<TARGET_PROPERTY:icu,INTERFACE_INCLUDE_DIRECTORIES>)
+# target_link_libraries(<your_target> PUBLIC icu)
+
+cmake_minimum_required(VERSION 2.8.2)
+
+project(icu-download)
+
+include(ExternalProject)
+ExternalProject_Add(icu-download
+  GIT_REPOSITORY    https://github.com/unicode-org/icu.git
+  GIT_TAG           release-64-2
+  SOURCE_DIR        "${CMAKE_CURRENT_BINARY_DIR}/icu"
+  BINARY_DIR        "${CMAKE_CURRENT_BINARY_DIR}/icu-build"
+  CONFIGURE_COMMAND ""
+  BUILD_COMMAND     ""
+  INSTALL_COMMAND   ""
+  TEST_COMMAND      ""
+  CMAKE_ARGS        "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+)

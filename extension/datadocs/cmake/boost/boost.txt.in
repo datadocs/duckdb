@@ -1,0 +1,23 @@
+# Boost Repository External Project template (headers only)
+#
+# To use, ddd the following in your CMakefile.txt
+#
+# fetch_dependency(boost "cmake/boost/boost.txt.in")
+# target_include_directories(<your_target> PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/boost)
+
+cmake_minimum_required(VERSION 2.8.2)
+
+project(boost-headers-download NONE)
+
+include(ExternalProject)
+ExternalProject_Add(boost-headers-download
+  GIT_REPOSITORY    https://github.com/panda-34/libboost-includes.git
+  GIT_TAG           master
+  SOURCE_DIR        "${CMAKE_CURRENT_BINARY_DIR}/boost/boost"
+  BINARY_DIR        "${CMAKE_CURRENT_BINARY_DIR}/boost-build"
+  CONFIGURE_COMMAND ""
+  BUILD_COMMAND     ""
+  INSTALL_COMMAND   ""
+  TEST_COMMAND      ""
+  CMAKE_ARGS        "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+)

@@ -48,6 +48,10 @@
 #define DUCKDB_EXTENSION_AUTOCOMPLETE_LINKED false
 #endif
 
+#ifndef DUCKDB_EXTENSION_DATADOCS_LINKED
+#define DUCKDB_EXTENSION_DATADOCS_LINKED false
+#endif
+
 // Load the generated header file containing our list of extension headers
 #if defined(GENERATED_EXTENSION_HEADERS) && GENERATED_EXTENSION_HEADERS && !defined(DUCKDB_AMALGAMATION)
 #include "duckdb/main/extension/generated_extension_loader.hpp"
@@ -93,6 +97,10 @@
 #if DUCKDB_EXTENSION_AUTOCOMPLETE_LINKED
 #include "autocomplete_extension.hpp"
 #endif
+
+#if DUCKDB_EXTENSION_DATADOCS_LINKED
+#include "datadocs_extension.hpp"
+#endif
 #endif
 
 namespace duckdb {
@@ -115,6 +123,7 @@ static DefaultExtension internal_extensions[] = {
     {"mysql_scanner", "Adds support for connecting to a MySQL database", false},
     {"sqlite_scanner", "Adds support for reading and writing SQLite database files", false},
     {"postgres_scanner", "Adds support for connecting to a Postgres database", false},
+	{"datadocs", "Datadocs functions", DUCKDB_EXTENSION_DATADOCS_LINKED},
     {"inet", "Adds support for IP-related data types and functions", false},
     {"spatial", "Geospatial extension that adds support for working with spatial data and functions", false},
     {"substrait", "Adds support for the Substrait integration", false},
@@ -387,6 +396,13 @@ ExtensionLoadResult ExtensionHelper::LoadExtensionInternal(DuckDB &db, const std
 		db.LoadExtension<InetExtension>();
 #else
 		// inet extension required but not build: skip this test
+		return ExtensionLoadResult::NOT_LOADED;
+#endif
+	} else if (extension == "datadocs") {
+#if DUCKDB_EXTENSION_DATADOCS_LINKED
+		db.LoadExtension<DatadocsExtension>();
+#else
+		// autocomplete extension required but not build: skip this test
 		return ExtensionLoadResult::NOT_LOADED;
 #endif
 	}
