@@ -141,6 +141,15 @@ endif
 ifeq (${BUILD_JEMALLOC}, 1)
 	BUILD_EXTENSIONS:=${BUILD_EXTENSIONS};jemalloc
 endif
+ifeq (${BUILD_EXCEL}, 1)
+	BUILD_EXTENSIONS:=${BUILD_EXTENSIONS};excel
+endif
+ifeq (${BUILD_DATADOCS}, 1)
+	EXTENSIONS:=${EXTENSIONS} -DBUILD_DATADOCS_EXTENSION=1
+endif
+ifeq (${BUILD_INET}, 1)
+	BUILD_EXTENSIONS:=${BUILD_EXTENSIONS};inet
+endif
 ifeq (${BUILD_ALL_EXT}, 1)
 	CMAKE_VARS:=${CMAKE_VARS} -DDUCKDB_EXTENSION_CONFIGS=".github/config/in_tree_extensions.cmake;.github/config/out_of_tree_extensions.cmake"
 else ifeq (${BUILD_ALL_IT_EXT}, 1)
