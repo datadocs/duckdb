@@ -1,11 +1,11 @@
 #pragma once
+#include "duckdb.hpp"
+
+#include <iterator>
 #include <stddef.h>
+#include <string_view>
 #include <type_traits>
 #include <utility>
-#include <iterator>
-#include <string_view>
-
-#include "duckdb.hpp"
 
 namespace duckdb {
 
@@ -149,7 +149,7 @@ void VectorExecuteImpl(DataChunk &args, Vector &result, FUNC &&func, std::index_
 	VectorHolder holders[N_ARG] = {{args.data[IDXS], size}...};
 	VectorReader readers[N_ARG] = {{holders[IDXS]}...};
 	for (idx_t i_row = 0; i_row < size; ++i_row) {
-		(... , readers[IDXS].SetRow(i_row));
+		(..., readers[IDXS].SetRow(i_row));
 		VectorWriter writer(result, i_row);
 		if (CHECK_NULL && (... || readers[IDXS].IsNull()) || !func(writer, readers[IDXS]...)) {
 			writer.SetNull();
@@ -161,16 +161,24 @@ void VectorExecuteImpl(DataChunk &args, Vector &result, FUNC &&func, std::index_
 }
 
 template <bool CHECK_NULL = true, typename... ARGS>
-void VectorExecute(DataChunk &args, Vector &result, bool(*func)(VectorWriter &, ARGS...)) {
+void VectorExecute(DataChunk &args, Vector &result, bool (*func)(VectorWriter &, ARGS...)) {
 	VectorExecuteImpl<CHECK_NULL>(args, result, func, std::index_sequence_for<ARGS...>());
 }
 
 template <bool CHECK_NULL = true, class T, typename... ARGS, typename E = typename std::remove_reference<T>::type>
-void VectorExecute(DataChunk &args, Vector &result, T &&instance,
-	               bool(E::*method)(VectorWriter &, ARGS...)) {
+void VectorExecute(DataChunk &args, Vector &result, T &&instance, bool (E::*method)(VectorWriter &, ARGS...)) {
 	VectorExecuteImpl<CHECK_NULL>(
 	    args, result, [&](auto &&...args) { return (instance.*method)(std::forward<decltype(args)>(args)...); },
 	    std::index_sequence_for<ARGS...>());
+}
+
+template <bool CHECK_NULL = true, class T, typename... ARGS, typename E = typename std::remove_reference<T>::type>
+void VectorCastExecute(VectorReader &reader, Vector &result, T &&instance, idx_t i_row,
+                       bool (E::*method)(VectorWriter &, ARGS...)) {
+	VectorWriter writer(result, i_row);
+	if (CHECK_NULL && reader.IsNull() || !(instance.*method)(writer, reader)) {
+		writer.SetNull();
+	}
 }
 
 } // namespace duckdb
