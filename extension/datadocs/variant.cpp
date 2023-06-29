@@ -950,16 +950,16 @@ Vector GetVariantVector(VectorReader reader, string type) {
 		VectorCastExecute(reader, res, VariantReaderBytes(), 0, &VariantReaderBytes::ProcessList);
 		return res;
 	} else if (type == "STRUCT") {
-		Vector res(LogicalType::ANY);
-		VectorCastExecute(reader, res, VariantReaderBytes(), 0, &VariantReaderBytes::ProcessScalar);
+		Vector res(LogicalType::VARCHAR);
+		VectorCastExecute(reader, res, VariantReaderString(), 0, &VariantReaderString::ProcessScalar);
 		return res;
 	} else if (type == "STRUCT[]") {
-		Vector res(LogicalType::LIST(LogicalType::ANY));
-		VectorCastExecute(reader, res, VariantReaderBytes(), 0, &VariantReaderBytes::ProcessList);
+		Vector res(LogicalType::LIST(LogicalType::VARCHAR));
+		VectorCastExecute(reader, res, VariantReaderString(), 0, &VariantReaderString::ProcessList);
 		return res;
 	}
 
-	return Vector(LogicalType::ANY);
+	return Vector(LogicalType::VARCHAR);
 }
 
 bool TryCastVariant(VectorReader reader, Value val, LogicalType target, Vector &result, idx_t idx,
