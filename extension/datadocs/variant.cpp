@@ -10,6 +10,8 @@
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/function/cast/cast_function_set.hpp"
+#include "duckdb/function/scalar/nested_functions.hpp"
+#include "duckdb/function/scalar/string_functions.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
 #include "duckdb/parser/parsed_data/create_type_info.hpp"
 #endif
@@ -1161,12 +1163,171 @@ static bool VariantAccessWrite(VectorWriter &result, const VectorReader &arg, yy
 	return true;
 }
 
+static bool VariantSliceWrite(VectorWriter &result, yyjson_mut_val *val, std::string arg_type, yyjson_mut_doc *res_doc,
+                              JSONAllocator &alc) {
+	VectorStructWriter writer = result.SetStruct();
+	writer[0].SetString(arg_type);
+	yyjson_mut_doc_set_root(res_doc, val);
+	size_t len;
+	char *data = yyjson_mut_write_opts(res_doc, 0, alc.GetYYAlc(), &len, nullptr);
+	writer[1].SetString(string_t(data, len));
+	return true;
+}
+
+bool ClampIndex(int64_t &index, const size_t &length) {
+	if (index < 0) {
+		if (index < -length) {
+			return false;
+		}
+		index = length + index;
+	} else if (index > length) {
+		index = length;
+	}
+	return true;
+}
+
+static bool ClampSlice(size_t length, int64_t &begin, int64_t &end, bool begin_valid, bool end_valid) {
+	// Clamp offsets
+	begin = begin_valid ? begin : 0;
+	begin = (begin > 0) ? begin - 1 : begin;
+	end = end_valid ? end : length;
+	if (!ClampIndex(begin, length) || !ClampIndex(end, length)) {
+		return false;
+	}
+	end = MaxValue<int64_t>(begin, end);
+
+	return true;
+}
+
 static bool VariantAccessIndexImpl(VectorWriter &result, const VectorReader &arg, const VectorReader &index) {
 	int64_t idx = index.Get<int64_t>();
 	JSONAllocator alc {Allocator::DefaultAllocator()};
 	auto arg_doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
 	auto arg_root = yyjson_doc_get_root(arg_doc);
 	return VariantAccessWrite(result, arg, yyjson_arr_get(arg_root, idx), alc);
+}
+
+static bool VariantListExtractImpl(VectorWriter &result, const VectorReader &arg, const VectorReader &index) {
+	int64_t idx = index.Get<int64_t>();
+	JSONAllocator alc {Allocator::DefaultAllocator()};
+	auto arg_doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+	auto arg_root = yyjson_doc_get_root(arg_doc);
+	if (yyjson_is_str(arg_root)) {
+		auto input_str = string_t(unsafe_yyjson_get_str(arg_root));
+		Vector res(LogicalType::VARCHAR);
+		auto str = SubstringFun::SubstringUnicode(res, string_t(unsafe_yyjson_get_str(arg_root)), idx, 1);
+		auto doc = JSONCommon::CreateDocument(alc.GetYYAlc());
+		auto root = yyjson_mut_strn(doc, str.GetDataUnsafe(), (size_t)str.GetSize());
+		if (yyjson_mut_is_null(root)) {
+			return false;
+		}
+		return VariantAccessWrite(result, arg, (yyjson_val *)root, alc);
+	} else if (yyjson_is_arr(arg_root)) {
+		auto list_size = yyjson_arr_size(arg_root);
+		// 1-based indexing
+		if (idx == 0) {
+			return false;
+		}
+		idx = (idx > 0) ? idx - 1 : idx;
+
+		idx_t child_idx;
+		if (idx < 0) {
+			if (idx < -list_size) {
+				return false;
+			}
+			child_idx = list_size + idx;
+		} else {
+			if ((idx_t)idx >= list_size) {
+				return false;
+			}
+			child_idx = idx;
+		}
+		return VariantAccessWrite(result, arg, yyjson_arr_get(arg_root, child_idx), alc);
+	} else {
+		throw NotImplementedException("Specifier type not implemented");
+		return false;
+	}
+	return false;
+}
+
+static bool VariantStructExtractImpl(VectorWriter &result, const VectorReader &arg, const VectorReader &index) {
+	std::string key = StringUtil::Lower(std::string(index.GetString()));
+	JSONAllocator alc {Allocator::DefaultAllocator()};
+	auto arg_doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+	auto arg_root = yyjson_doc_get_root(arg_doc);
+	if (yyjson_is_obj(arg_root)) {
+		size_t idx, max;
+		yyjson_val *k, *v;
+		vector<string> candidates;
+		yyjson_obj_foreach(arg_root, idx, max, k, v) {
+			std::string kstr = yyjson_get_str(k);
+			if (key == StringUtil::Lower(kstr)) {
+				return VariantAccessWrite(result, arg, v, alc);
+			}
+			candidates.push_back(kstr);
+		}
+		auto closest_settings = StringUtil::TopNLevenshtein(candidates, key);
+		auto message = StringUtil::CandidatesMessage(closest_settings, "Candidate Entries");
+		throw BinderException("Could not find key \"%s\" in variant struct\n%s", key, message);
+		return false;
+	} else {
+		throw NotImplementedException("Specifier type not implemented");
+		return false;
+	}
+	return false;
+}
+
+static bool VariantListSliceImpl(VectorWriter &result, const VectorReader &arg, const VectorReader &begin,
+                                 const VectorReader &end) {
+	if (arg.IsNull()) {
+		return false;
+	}
+	JSONAllocator alc {Allocator::DefaultAllocator()};
+	auto arg_doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+	auto arg_root = yyjson_doc_get_root(arg_doc);
+	bool is_string = yyjson_is_str(arg_root);
+	bool is_list = yyjson_is_arr(arg_root);
+	if (!is_list && !is_string) {
+		throw BinderException("ARRAY_SLICE for variant can only operate on variant of LISTs and VARCHARs");
+		return false;
+	}
+	int64_t begin_idx = begin.Get<int64_t>();
+	bool bvalid = !begin.IsNull();
+	int64_t end_idx = end.Get<int64_t>();
+	bool evalid = !end.IsNull();
+	auto doc = JSONCommon::CreateDocument(alc.GetYYAlc());
+	if (is_string) {
+		auto input_str = string_t(unsafe_yyjson_get_str(arg_root));
+		if (!ClampSlice(input_str.GetSize(), begin_idx, end_idx, bvalid, evalid)) {
+			return false;
+		}
+		Vector res(LogicalType::VARCHAR);
+		auto str = SubstringFun::SubstringUnicode(res, string_t(unsafe_yyjson_get_str(arg_root)), begin_idx + 1,
+		                                          end_idx - begin_idx);
+		auto root = yyjson_mut_strn(doc, str.GetDataUnsafe(), (size_t)str.GetSize());
+		if (yyjson_mut_is_null(root)) {
+			return false;
+		}
+		return VariantSliceWrite(result, root, std::string(arg[0].GetString()), doc, alc);
+	} else {
+		auto list_size = yyjson_arr_size(arg_root);
+		if (!ClampSlice(list_size, begin_idx, end_idx, bvalid, evalid)) {
+			return false;
+		}
+
+		yyjson_mut_val *obj = yyjson_mut_arr(doc);
+		idx_t i = 0;
+		for (idx_t i = begin_idx; i < end_idx; i++) {
+			auto child = yyjson_arr_get(arg_root, i);
+			if (yyjson_is_null(child)) {
+				yyjson_mut_arr_add_null(doc, obj);
+			} else {
+				yyjson_mut_arr_append(obj, yyjson_val_mut_copy(doc, child));
+			}
+		}
+		return VariantSliceWrite(result, obj, std::string(arg[0].GetString()), doc, alc);
+	}
+	return false;
 }
 
 static bool VariantAccessKeyImpl(VectorWriter &result, const VectorReader &arg, const VectorReader &index) {
@@ -1182,9 +1343,37 @@ static void VariantAccessIndexFunc(DataChunk &args, ExpressionState &state, Vect
 	VectorExecute(args, result, VariantAccessIndexImpl);
 }
 
+static void VariantListExtractFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.data[0].GetType() == DDVariantType);
+	VectorExecute(args, result, VariantListExtractImpl);
+}
+
+static void VariantStructExtractFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.data[0].GetType() == DDVariantType);
+	VectorExecute(args, result, VariantStructExtractImpl);
+}
+
+static void VariantListSliceFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.data[0].GetType() == DDVariantType);
+	VectorExecute<false>(args, result, VariantListSliceImpl);
+}
+
 static void VariantAccessKeyFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.data[0].GetType() == DDVariantType);
+	result.SetVectorType(args.AllConstant() ? VectorType::CONSTANT_VECTOR : VectorType::FLAT_VECTOR);
 	VectorExecute(args, result, VariantAccessKeyImpl);
+}
+
+static unique_ptr<FunctionData> VariantListSliceBind(ClientContext &context, ScalarFunction &bound_function,
+                                                     vector<unique_ptr<Expression>> &arguments) {
+	D_ASSERT(bound_function.arguments.size() == 3);
+	if (arguments[0]->return_type == DDVariantType) {
+		bound_function.return_type = arguments[0]->return_type;
+	} else {
+		throw BinderException("ARRAY_SLICE for variant can only operate on variant of LISTs and VARCHARs");
+	}
+
+	return make_uniq<VariableReturnBindData>(bound_function.return_type);
 }
 
 static string VariantSortHashReal(std::string_view arg) {
@@ -1582,6 +1771,39 @@ void DataDocsExtension::LoadVariant(Connection &con) {
 	CreateScalarFunctionInfo from_sort_hash_info(
 	    ScalarFunction("variant_from_sort_hash", {LogicalType::VARCHAR}, DDVariantType, VariantFromSortHash));
 	catalog.CreateFunction(context, from_sort_hash_info);
+
+	auto vextractfun = ScalarFunction({DDVariantType, LogicalType::BIGINT}, DDVariantType, VariantListExtractFunc);
+	auto vstructextractfun =
+	    ScalarFunction({DDVariantType, LogicalType::VARCHAR}, DDVariantType, VariantStructExtractFunc);
+	ScalarFunctionSet variant_extract_set("array_extract");
+	variant_extract_set.AddFunction(vextractfun);
+	variant_extract_set.AddFunction(vstructextractfun);
+	CreateScalarFunctionInfo variant_extract_info(std::move(variant_extract_set));
+	catalog.AddFunction(context, variant_extract_info);
+
+	ScalarFunctionSet variant_list_extract_set("list_extract");
+	variant_list_extract_set.AddFunction(vextractfun);
+	CreateScalarFunctionInfo variant_list_extract_info(std::move(variant_list_extract_set));
+	catalog.AddFunction(context, variant_list_extract_info);
+
+	ScalarFunctionSet variant_list_element_set("list_element");
+	variant_list_element_set.AddFunction(vextractfun);
+	CreateScalarFunctionInfo variant_list_element_info(std::move(variant_list_element_set));
+	catalog.AddFunction(context, variant_list_element_info);
+
+	auto vslicefun = ScalarFunction({DDVariantType, LogicalType::BIGINT, LogicalType::BIGINT}, DDVariantType,
+	                                VariantListSliceFunc, VariantListSliceBind);
+	// vslicefun.varargs = LogicalType::ANY;
+	vslicefun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	ScalarFunctionSet variant_array_slice_set("array_slice");
+	variant_array_slice_set.AddFunction(vslicefun);
+	CreateScalarFunctionInfo variant_array_slice_info(std::move(variant_array_slice_set));
+	catalog.AddFunction(context, variant_array_slice_info);
+
+	ScalarFunctionSet variant_struct_extract_set("struct_extract");
+	variant_struct_extract_set.AddFunction(vstructextractfun);
+	CreateScalarFunctionInfo variant_struct_extract_info(std::move(variant_struct_extract_set));
+	catalog.AddFunction(context, variant_struct_extract_info);
 }
 
 } // namespace duckdb
