@@ -36,6 +36,7 @@ LogicalType getVariantType() {
 	child_list_t<LogicalType> children;
 	children.push_back(make_pair("__type", LogicalType::VARCHAR));
 	children.push_back(make_pair("__value", DDJsonType));
+	children.push_back(make_pair("__info", DDJsonType));
 	auto variant_type = LogicalType::STRUCT(move(children));
 	variant_type.SetAlias("VARIANT");
 
@@ -248,6 +249,25 @@ public:
 		size_t len;
 		char *data = yyjson_mut_write_opts(doc, 0, alc.GetYYAlc(), &len, nullptr);
 		writer[1].SetString(string_t(data, len));
+		type_info = ProcessTypeInfo(*type, root, true, is_list);
+		if (type_info) {
+			size_t idx, max;
+			yyjson_mut_val *k, *v;
+			// std::cout << "type info is ========= " << (int)yyjson_mut_get_type(type_info) << std::endl;
+			// yyjson_mut_obj_foreach(type_info, idx, max, k, v) {
+			// 	std::string kstr = yyjson_mut_get_str(k);
+			// 	// std::cout << "Here ========================= 33 === " << kstr
+			// 	//           << " is str ==== " << (int)yyjson_mut_get_type(v) << std::endl;
+			// 	std::string vstr = yyjson_mut_get_str(v);
+			// 	// std::cout << "key =================== " << kstr << " and value ======= " << vstr << std::endl;
+			// }
+			yyjson_mut_doc_set_root(doc, type_info);
+			size_t len;
+			char *data = yyjson_mut_write_opts(doc, 0, alc.GetYYAlc(), &len, nullptr);
+			writer[2].SetString(string_t(data, len));
+		} else {
+			writer[2].SetNull();
+		}
 		return true;
 	}
 
@@ -266,6 +286,152 @@ private:
 		} else {
 			root = (this->*write_func)(arg);
 		}
+		return root;
+	}
+
+	string VariantTypeFromDuckdbType(LogicalType type) {
+		auto isList = type.id() == LogicalTypeId::LIST;
+		if (isList) {
+			type = ListType::GetChildType(type);
+		}
+		switch (type.id()) {
+		case LogicalTypeId::BOOLEAN: {
+			return isList ? "BOOL[]" : "BOOL";
+		}
+
+		case LogicalTypeId::TINYINT:
+		case LogicalTypeId::SMALLINT:
+		case LogicalTypeId::INTEGER:
+		case LogicalTypeId::BIGINT:
+		case LogicalTypeId::UTINYINT:
+		case LogicalTypeId::USMALLINT:
+		case LogicalTypeId::UINTEGER:
+		case LogicalTypeId::UBIGINT:
+		case LogicalTypeId::HUGEINT: {
+			return isList ? "INT64[]" : "INT64";
+		}
+
+		case LogicalTypeId::FLOAT:
+		case LogicalTypeId::DOUBLE: {
+			return isList ? "FLOAT64[]" : "FLOAT64";
+		}
+		case LogicalTypeId::DECIMAL: {
+			return isList ? "NUMERIC[]" : "NUMERIC";
+		}
+		case LogicalTypeId::VARCHAR:
+			if (type.GetAlias() == JSONCommon::JSON_TYPE_NAME) {
+				return isList ? "JSON[]" : "JSON";
+			} else {
+				return isList ? "STRING[]" : "STRING";
+			}
+
+		case LogicalTypeId::BLOB:
+			if (type.GetAlias() == "GEOGRAPHY") {
+				return isList ? "GEOGRAPHY[]" : "GEOGRAPHY";
+			} else {
+				return isList ? "BYTES[]" : "BYTES";
+			}
+		case LogicalTypeId::UUID:
+		case LogicalTypeId::ENUM: {
+			return isList ? "STRING[]" : "STRING";
+		}
+		case LogicalTypeId::DATE: {
+			return isList ? "DATE[]" : "DATE";
+		}
+		case LogicalTypeId::TIME:
+		case LogicalTypeId::TIME_TZ: {
+			return isList ? "TIME[]" : "TIME";
+		}
+		case LogicalTypeId::TIMESTAMP:
+		case LogicalTypeId::TIMESTAMP_SEC:
+		case LogicalTypeId::TIMESTAMP_MS:
+		case LogicalTypeId::TIMESTAMP_NS: {
+			return isList ? "DATETIME[]" : "DATETIME";
+		}
+		case LogicalTypeId::TIMESTAMP_TZ: {
+			return isList ? "TIMESTAMP[]" : "TIMESTAMP";
+		}
+		case LogicalTypeId::INTERVAL: {
+			return isList ? "INTERVAL[]" : "INTERVAL";
+		}
+		case LogicalTypeId::SQLNULL: {
+			return isList ? "NULL[]" : "NULL";
+		}
+		case LogicalTypeId::LIST: {
+			return isList ? "JSON[]" : "JSON";
+		}
+		case LogicalTypeId::STRUCT:
+		case LogicalTypeId::MAP: {
+			return isList ? "STRUCT[]" : "STRUCT";
+		}
+		case LogicalTypeId::UNION: {
+			return isList ? "JSON" : NULL;
+		}
+		default: {
+			return "UNKNOWN";
+		}
+		}
+	}
+
+	yyjson_mut_val *ProcessTypeInfo(const LogicalType &type, yyjson_mut_val *value, bool isRoot = false,
+	                                bool isList = false) {
+		yyjson_mut_val *root = nullptr;
+		if (yyjson_mut_is_null(value)) {
+			return root;
+		}
+		if (isList) {
+			size_t idx;
+			size_t max;
+			yyjson_mut_val *item;
+			root = yyjson_mut_arr(doc);
+			yyjson_mut_arr_foreach(value, idx, max, item) {
+				yyjson_mut_val *val = ProcessTypeInfo(type, item, false, false);
+				yyjson_mut_arr_append(root, val);
+			}
+			return root;
+		}
+
+		switch (type.id()) {
+		case LogicalTypeId::STRUCT: {
+			root = yyjson_mut_obj(doc);
+			for (auto &[child_key, child_type] : StructType::GetChildTypes(type)) {
+				yyjson_mut_val *key = yyjson_mut_strncpy(doc, child_key.data(), child_key.size());
+				std::string key_str = yyjson_mut_get_str(key);
+				// std::cout << "key here ================ " << key_str << std::endl;
+				yyjson_mut_val *val = ProcessTypeInfo(
+				    child_type, yyjson_mut_obj_getn(value, key_str.data(), key_str.size()), false, false);
+				// std::cout << "value here ================ " << yyjson_mut_get_str(val)
+				//           << " and type ==== " << (int)yyjson_mut_get_type(val) << std::endl;
+				yyjson_mut_obj_add(root, key, val);
+			}
+		} break;
+
+		case LogicalTypeId::MAP: {
+			root = yyjson_mut_obj(doc);
+			auto child_type = MapType::ValueType(type);
+			size_t idx, max;
+			yyjson_mut_val *key, *v;
+			yyjson_mut_obj_foreach(value, idx, max, key, v) {
+				std::string key_str = yyjson_mut_get_str(key);
+				yyjson_mut_val *val = ProcessTypeInfo(
+				    child_type, yyjson_mut_obj_getn(value, key_str.data(), key_str.size()), false, false);
+				yyjson_mut_obj_add(root, key, val);
+			}
+		} break;
+
+		case LogicalTypeId::LIST: {
+			auto child_type = ListType::GetChildType(type);
+			root = ProcessTypeInfo(child_type, value, false, true);
+		} break;
+
+		default: {
+			if (!isRoot) {
+				string type_str = VariantTypeFromDuckdbType(type);
+				root = yyjson_mut_strncpy(doc, type_str.data(), type_str.size());
+			}
+		} break;
+		}
+
 		return root;
 	}
 
@@ -450,6 +616,7 @@ private:
 	JSONAllocator alc;
 	yyjson_mut_val *(VariantWriter::*write_func)(const VectorReader &) = nullptr;
 	const char *type_name = nullptr;
+	yyjson_mut_val *type_info = nullptr;
 	bool is_list = false;
 	const LogicalType *type;
 };
