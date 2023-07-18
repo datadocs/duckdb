@@ -1877,7 +1877,7 @@ static void VariantFromSortHash(DataChunk &args, ExpressionState &state, Vector 
 	casts.RegisterCastFunction(DDVariantType, TYPE, VariantCasts::VariantCastAny);                                     \
 	casts.RegisterCastFunction(DDVariantType, LogicalType::LIST(TYPE), VariantCasts::VariantCastAny);
 
-void DataDocsExtension::LoadVariant(Connection &con) {
+void DatadocsExtension::LoadVariant(Connection &con) {
 	auto &context = *con.context;
 	auto &catalog = Catalog::GetSystemCatalog(context);
 
