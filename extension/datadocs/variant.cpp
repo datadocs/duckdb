@@ -16,7 +16,7 @@
 #include "duckdb/parser/parsed_data/create_type_info.hpp"
 #endif
 #include "converters.hpp"
-#include "datadocs-extension.hpp"
+#include "datadocs_extension.hpp"
 #include "datadocs.hpp"
 #include "fmt/format.h"
 #include "geometry.hpp"
