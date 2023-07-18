@@ -1,6 +1,6 @@
 #define DUCKDB_EXTENSION_MAIN
 
-#include "../include/datadocs-extension.hpp"
+#include "../include/datadocs_extension.hpp"
 #include "../include/datadocs.hpp"
 
 #include "accessor-functions.hpp"
@@ -20,7 +20,7 @@
 
 namespace duckdb {
 
-void DataDocsExtension::LoadGeo(Connection &con) {
+void DatadocsExtension::LoadGeo(Connection &con) {
 	auto &catalog = Catalog::GetSystemCatalog(*con.context);
 
 	DDGeoType = LogicalType(LogicalTypeId::BLOB);

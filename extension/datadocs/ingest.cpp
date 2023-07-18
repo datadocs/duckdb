@@ -3,7 +3,7 @@
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 #endif
 
-#include "datadocs-extension.hpp"
+#include "datadocs_extension.hpp"
 #include "datadocs.hpp"
 #include "inferrer.h"
 
@@ -56,7 +56,7 @@ static void IngestImpl(ClientContext &context, TableFunctionInput &data_p, DataC
 
 } // namespace
 
-void DataDocsExtension::LoadIngest(Connection &con) {
+void DatadocsExtension::LoadIngest(Connection &con) {
 	auto &context = *con.context;
 	auto &catalog = Catalog::GetSystemCatalog(context);
 	CreateTableFunctionInfo schema_info(
