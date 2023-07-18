@@ -1,10 +1,10 @@
 #define DUCKDB_EXTENSION_MAIN
 
-#include "datadocs-extension.hpp"
+#include "datadocs_extension.hpp"
 
 namespace duckdb {
 
-void DataDocsExtension::Load(DuckDB &db) {
+void DatadocsExtension::Load(DuckDB &db) {
 	Connection con(db);
 	con.BeginTransaction();
 	LoadGeo(con);
@@ -13,7 +13,7 @@ void DataDocsExtension::Load(DuckDB &db) {
 	con.Commit();
 }
 
-string DataDocsExtension::Name() {
+string DatadocsExtension::Name() {
 	return "datadocs";
 }
 
