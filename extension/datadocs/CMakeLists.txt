@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.1)
 
-project(DataDocsExtension)
+project(DatadocsExtension)
 
 include_directories(${CMAKE_BINARY_DIR}/include)
 
@@ -75,7 +75,7 @@ target_link_libraries(simple_icu_init
 add_subdirectory(geo)
 
 set(DATADOCS_EXTENSION_FILES
-	datadocs-extension.cpp
+	datadocs_extension.cpp
 	vector_proxy.cpp
 	column.cpp
 	converters.cpp
