@@ -16,8 +16,8 @@
 #include "duckdb/parser/parsed_data/create_type_info.hpp"
 #endif
 #include "converters.hpp"
-#include "datadocs_extension.hpp"
 #include "datadocs.hpp"
+#include "datadocs_extension.hpp"
 #include "fmt/format.h"
 #include "geometry.hpp"
 #include "json_common.hpp"
@@ -33,14 +33,18 @@ LogicalType DDGeoType;
 const LogicalType DefaultDecimalType = LogicalType::DECIMAL(18, 3);
 const LogicalType DDNumericType = LogicalType::DECIMAL(dd_numeric_width, dd_numeric_scale);
 const LogicalType DDJsonType = JSONCommon::JSONType();
+const string VARIANT_TYPE_KEY = "__type";
+const string VARIANT_VALUE_KEY = "__value";
+const string VARIANT_INFO_KEY = "__info";
+const string VARIANT_TYPE_NAME = "VARIANT";
 
 LogicalType getVariantType() {
 	child_list_t<LogicalType> children;
-	children.push_back(make_pair("__type", LogicalType::VARCHAR));
-	children.push_back(make_pair("__value", DDJsonType));
-	children.push_back(make_pair("__info", DDJsonType));
+	children.push_back(make_pair(VARIANT_TYPE_KEY, LogicalType::VARCHAR));
+	children.push_back(make_pair(VARIANT_VALUE_KEY, DDJsonType));
+	children.push_back(make_pair(VARIANT_INFO_KEY, DDJsonType));
 	auto variant_type = LogicalType::STRUCT(move(children));
-	variant_type.SetAlias("VARIANT");
+	variant_type.SetAlias(VARIANT_TYPE_NAME);
 
 	return variant_type;
 }
@@ -312,8 +316,13 @@ public:
 			write_func = &VariantWriter::WriteList;
 			break;
 		case LogicalTypeId::STRUCT:
-			type_name = is_list ? "STRUCT[]" : "STRUCT";
-			write_func = &VariantWriter::WriteStruct;
+			if (type->GetAlias() == VARIANT_TYPE_NAME) {
+				type_name = is_list ? "VARIANT[]" : "VARIANT";
+				write_func = &VariantWriter::WriteVariant;
+			} else {
+				type_name = is_list ? "STRUCT[]" : "STRUCT";
+				write_func = &VariantWriter::WriteStruct;
+			}
 			break;
 		case LogicalTypeId::MAP:
 			type_name = is_list ? "STRUCT[]" : "STRUCT";
@@ -344,7 +353,7 @@ public:
 		size_t len;
 		char *data = yyjson_mut_write_opts(doc, 0, alc.GetYYAlc(), &len, nullptr);
 		writer[1].SetString(string_t(data, len));
-		type_info = ProcessTypeInfo(*type, root, true, is_list);
+		type_info = ProcessTypeInfo(*type, arg, true, is_list);
 		if (type_info) {
 			yyjson_mut_doc_set_root(doc, type_info);
 			size_t len;
@@ -458,52 +467,75 @@ private:
 		}
 	}
 
-	yyjson_mut_val *ProcessTypeInfo(const LogicalType &type, yyjson_mut_val *value, bool isRoot = false,
+	yyjson_mut_val *ProcessTypeInfo(const LogicalType &type, const VectorReader &arg, bool isRoot = false,
 	                                bool isList = false) {
 		yyjson_mut_val *root = nullptr;
-		if (yyjson_mut_is_null(value)) {
-			return root;
-		}
 		if (isList) {
-			size_t idx;
-			size_t max;
-			yyjson_mut_val *item;
 			root = yyjson_mut_arr(doc);
-			yyjson_mut_arr_foreach(value, idx, max, item) {
-				yyjson_mut_val *val = ProcessTypeInfo(type, item, false, false);
-				yyjson_mut_arr_append(root, val);
+			for (const VectorReader &item : arg) {
+				if (type.GetAlias() == VARIANT_TYPE_NAME) {
+					if (item.IsNull()) {
+						yyjson_mut_arr_add_null(doc, root);
+					} else {
+						yyjson_mut_arr_append(root, ProcessTypeInfo(type, item, false, false));
+					}
+				} else {
+					yyjson_mut_arr_append(root, ProcessTypeInfo(type, item, false, false));
+				}
 			}
 			return root;
 		}
 
 		switch (type.id()) {
 		case LogicalTypeId::STRUCT: {
-			root = yyjson_mut_obj(doc);
-			for (auto &[child_key, child_type] : StructType::GetChildTypes(type)) {
-				yyjson_mut_val *key = yyjson_mut_strncpy(doc, child_key.data(), child_key.size());
-				std::string key_str = yyjson_mut_get_str(key);
-				yyjson_mut_val *val = ProcessTypeInfo(
-				    child_type, yyjson_mut_obj_getn(value, key_str.data(), key_str.size()), false, false);
-				yyjson_mut_obj_add(root, key, val);
+			if (type.GetAlias() == VARIANT_TYPE_NAME) {
+				idx_t i = 0;
+				yyjson_mut_val *type_val = nullptr;
+				for (auto &[child_key, child_type] : StructType::GetChildTypes(type)) {
+					const VectorReader item = arg[i++];
+					if (child_key == VARIANT_INFO_KEY) {
+						root = item.IsNull() ? nullptr : VariantWriter(child_type, doc).ProcessValue(item);
+					} else if (child_key == VARIANT_TYPE_KEY) {
+						type_val =
+						    item.IsNull() ? yyjson_mut_null(doc) : VariantWriter(child_type, doc).ProcessValue(item);
+					}
+				}
+				if (!isRoot && !root) {
+					root = type_val;
+				}
+			} else {
+				root = yyjson_mut_obj(doc);
+				idx_t i = 0;
+				for (auto &[child_key, child_type] : StructType::GetChildTypes(type)) {
+					const VectorReader item = arg[i++];
+					yyjson_mut_val *key = yyjson_mut_strncpy(doc, child_key.data(), child_key.size());
+					std::string key_str = yyjson_mut_get_str(key);
+					yyjson_mut_val *val = ProcessTypeInfo(child_type, item, false, false);
+					yyjson_mut_obj_add(root, key, val);
+				}
 			}
 		} break;
 
 		case LogicalTypeId::MAP: {
+			if (MapType::KeyType(type).id() != LogicalTypeId::VARCHAR) {
+				return yyjson_mut_null(doc);
+			}
 			root = yyjson_mut_obj(doc);
-			auto child_type = MapType::ValueType(type);
-			size_t idx, max;
-			yyjson_mut_val *key, *v;
-			yyjson_mut_obj_foreach(value, idx, max, key, v) {
-				std::string key_str = yyjson_mut_get_str(key);
-				yyjson_mut_val *val = ProcessTypeInfo(
-				    child_type, yyjson_mut_obj_getn(value, key_str.data(), key_str.size()), false, false);
-				yyjson_mut_obj_add(root, key, val);
+			for (const VectorReader &item : arg) {
+				D_ASSERT(!item.IsNull());
+				std::string_view child_key = item[0].GetString();
+				yyjson_mut_val *key = yyjson_mut_strn(doc, child_key.data(), child_key.size());
+				const VectorReader &arg_value = item[1];
+				yyjson_mut_val *val = arg_value.IsNull()
+				                          ? yyjson_mut_null(doc)
+				                          : ProcessTypeInfo(MapType::ValueType(type), item, false, false);
+				yyjson_mut_obj_put(root, key, val);
 			}
 		} break;
 
 		case LogicalTypeId::LIST: {
 			auto child_type = ListType::GetChildType(type);
-			root = ProcessTypeInfo(child_type, value, false, true);
+			root = ProcessTypeInfo(child_type, arg, false, true);
 		} break;
 
 		default: {
@@ -662,6 +694,22 @@ private:
 			yyjson_mut_val *val =
 			    item.IsNull() ? yyjson_mut_null(doc) : VariantWriter(child_type, doc).ProcessValue(item);
 			yyjson_mut_obj_put(obj, key, val);
+		}
+		return obj;
+	}
+
+	yyjson_mut_val *WriteVariant(const VectorReader &arg) {
+		yyjson_mut_val *obj = yyjson_mut_obj(doc);
+		idx_t i = 0;
+		for (auto &[child_key, child_type] : StructType::GetChildTypes(*type)) {
+			const VectorReader item = arg[i++];
+			yyjson_mut_val *val =
+			    item.IsNull() ? yyjson_mut_null(doc) : VariantWriter(child_type, doc).ProcessValue(item);
+			if (child_key == VARIANT_TYPE_KEY && !is_list) {
+				type_name = yyjson_mut_get_str(val);
+			} else if (child_key == VARIANT_VALUE_KEY) {
+				obj = val;
+			}
 		}
 		return obj;
 	}
@@ -1770,7 +1818,8 @@ static void FromVariantListFunc(DataChunk &args, ExpressionState &state, Vector 
 	VectorExecute(args, result, Reader(), &Reader::ProcessList);
 }
 
-static bool VariantAccessWrite(VectorWriter &result, const VectorReader &arg, yyjson_val *val, JSONAllocator &alc) {
+static bool VariantAccessWrite(VectorWriter &result, const VectorReader &arg, yyjson_val *val, yyjson_val *info,
+                               JSONAllocator &alc) {
 	if (!val || unsafe_yyjson_is_null(val)) {
 		return false;
 	}
@@ -1803,23 +1852,50 @@ static bool VariantAccessWrite(VectorWriter &result, const VectorReader &arg, yy
 	}
 
 	VectorStructWriter writer = result.SetStruct();
+	if (res_type == VARIANT_TYPE_NAME) {
+		if (yyjson_is_arr(info)) {
+			res_type = "JSON";
+		} else if (yyjson_is_obj(info)) {
+			res_type = "STRUCT";
+		} else if (yyjson_is_str(info)) {
+			res_type = yyjson_get_str(info);
+		}
+	}
 	writer[0].SetString(res_type);
 	auto res_doc = JSONCommon::CreateDocument(alc.GetYYAlc());
 	yyjson_mut_doc_set_root(res_doc, yyjson_val_mut_copy(res_doc, val));
 	size_t len;
 	char *data = yyjson_mut_write_opts(res_doc, 0, alc.GetYYAlc(), &len, nullptr);
 	writer[1].SetString(string_t(data, len));
+	if (!info || yyjson_is_null(info)) {
+		writer[2].SetNull();
+	} else {
+		auto info_doc = JSONCommon::CreateDocument(alc.GetYYAlc());
+		yyjson_mut_doc_set_root(info_doc, yyjson_val_mut_copy(info_doc, info));
+		size_t info_len;
+		char *info_data = yyjson_mut_write_opts(info_doc, 0, alc.GetYYAlc(), &info_len, nullptr);
+		writer[2].SetString(string_t(info_data, info_len));
+	}
 	return true;
 }
 
-static bool VariantSliceWrite(VectorWriter &result, yyjson_mut_val *val, std::string arg_type, yyjson_mut_doc *res_doc,
-                              JSONAllocator &alc) {
+static bool VariantSliceWrite(VectorWriter &result, yyjson_mut_val *val, yyjson_mut_val *info, std::string arg_type,
+                              yyjson_mut_doc *res_doc, JSONAllocator &alc) {
 	VectorStructWriter writer = result.SetStruct();
 	writer[0].SetString(arg_type);
 	yyjson_mut_doc_set_root(res_doc, val);
 	size_t len;
 	char *data = yyjson_mut_write_opts(res_doc, 0, alc.GetYYAlc(), &len, nullptr);
 	writer[1].SetString(string_t(data, len));
+	if (!info || yyjson_mut_is_null(info)) {
+		writer[2].SetNull();
+	} else {
+		auto info_doc = JSONCommon::CreateDocument(alc.GetYYAlc());
+		yyjson_mut_doc_set_root(info_doc, info);
+		size_t info_len;
+		char *info_data = yyjson_mut_write_opts(info_doc, 0, alc.GetYYAlc(), &info_len, nullptr);
+		writer[2].SetString(string_t(info_data, info_len));
+	}
 	return true;
 }
 
@@ -1853,7 +1929,9 @@ static bool VariantAccessIndexImpl(VectorWriter &result, const VectorReader &arg
 	JSONAllocator alc {Allocator::DefaultAllocator()};
 	auto arg_doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
 	auto arg_root = yyjson_doc_get_root(arg_doc);
-	return VariantAccessWrite(result, arg, yyjson_arr_get(arg_root, idx), alc);
+	auto info_doc = JSONCommon::ReadDocument(arg[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+	auto info_root = yyjson_doc_get_root(info_doc);
+	return VariantAccessWrite(result, arg, yyjson_arr_get(arg_root, idx), yyjson_arr_get(info_root, idx), alc);
 }
 
 static bool VariantListExtractImpl(VectorWriter &result, const VectorReader &arg, const VectorReader &index) {
@@ -1870,8 +1948,10 @@ static bool VariantListExtractImpl(VectorWriter &result, const VectorReader &arg
 		if (yyjson_mut_is_null(root)) {
 			return false;
 		}
-		return VariantAccessWrite(result, arg, (yyjson_val *)root, alc);
+		return VariantAccessWrite(result, arg, (yyjson_val *)root, nullptr, alc);
 	} else if (yyjson_is_arr(arg_root)) {
+		auto info_doc = JSONCommon::ReadDocument(arg[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+		auto info_root = yyjson_doc_get_root(info_doc);
 		auto list_size = yyjson_arr_size(arg_root);
 		// 1-based indexing
 		if (idx == 0) {
@@ -1891,7 +1971,8 @@ static bool VariantListExtractImpl(VectorWriter &result, const VectorReader &arg
 			}
 			child_idx = idx;
 		}
-		return VariantAccessWrite(result, arg, yyjson_arr_get(arg_root, child_idx), alc);
+		return VariantAccessWrite(result, arg, yyjson_arr_get(arg_root, child_idx),
+		                          yyjson_arr_get(info_root, child_idx), alc);
 	} else {
 		throw NotImplementedException("Specifier type not implemented");
 		return false;
@@ -1904,6 +1985,8 @@ static bool VariantStructExtractImpl(VectorWriter &result, const VectorReader &a
 	JSONAllocator alc {Allocator::DefaultAllocator()};
 	auto arg_doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
 	auto arg_root = yyjson_doc_get_root(arg_doc);
+	auto info_doc = JSONCommon::ReadDocument(arg[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+	auto info_root = yyjson_doc_get_root(info_doc);
 	if (yyjson_is_obj(arg_root)) {
 		size_t idx, max;
 		yyjson_val *k, *v;
@@ -1911,7 +1994,7 @@ static bool VariantStructExtractImpl(VectorWriter &result, const VectorReader &a
 		yyjson_obj_foreach(arg_root, idx, max, k, v) {
 			std::string kstr = yyjson_get_str(k);
 			if (key == StringUtil::Lower(kstr)) {
-				return VariantAccessWrite(result, arg, v, alc);
+				return VariantAccessWrite(result, arg, v, yyjson_obj_getn(info_root, key.data(), key.size()), alc);
 			}
 			candidates.push_back(kstr);
 		}
@@ -1957,24 +2040,34 @@ static bool VariantListSliceImpl(VectorWriter &result, const VectorReader &arg, 
 		if (yyjson_mut_is_null(root)) {
 			return false;
 		}
-		return VariantSliceWrite(result, root, std::string(arg[0].GetString()), doc, alc);
+		return VariantSliceWrite(result, root, nullptr, std::string(arg[0].GetString()), doc, alc);
 	} else {
+		auto info_doc = JSONCommon::ReadDocument(arg[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+		auto info_root = yyjson_doc_get_root(info_doc);
 		auto list_size = yyjson_arr_size(arg_root);
 		if (!ClampSlice(list_size, begin_idx, end_idx, bvalid, evalid)) {
 			return false;
 		}
 
 		yyjson_mut_val *obj = yyjson_mut_arr(doc);
+		yyjson_mut_val *info = yyjson_mut_arr(doc);
 		idx_t i = 0;
 		for (idx_t i = begin_idx; i < end_idx; i++) {
 			auto child = yyjson_arr_get(arg_root, i);
+			auto child_info = yyjson_arr_get(info_root, i);
 			if (yyjson_is_null(child)) {
 				yyjson_mut_arr_add_null(doc, obj);
 			} else {
 				yyjson_mut_arr_append(obj, yyjson_val_mut_copy(doc, child));
 			}
+
+			if (yyjson_is_null(child_info)) {
+				yyjson_mut_arr_add_null(doc, info);
+			} else {
+				yyjson_mut_arr_append(info, yyjson_val_mut_copy(doc, child_info));
+			}
 		}
-		return VariantSliceWrite(result, obj, std::string(arg[0].GetString()), doc, alc);
+		return VariantSliceWrite(result, obj, info, std::string(arg[0].GetString()), doc, alc);
 	}
 	return false;
 }
@@ -1984,7 +2077,10 @@ static bool VariantAccessKeyImpl(VectorWriter &result, const VectorReader &arg, 
 	JSONAllocator alc {Allocator::DefaultAllocator()};
 	auto arg_doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
 	auto arg_root = yyjson_doc_get_root(arg_doc);
-	return VariantAccessWrite(result, arg, yyjson_obj_getn(arg_root, key.data(), key.size()), alc);
+	auto info_doc = JSONCommon::ReadDocument(arg[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+	auto info_root = yyjson_doc_get_root(info_doc);
+	return VariantAccessWrite(result, arg, yyjson_obj_getn(arg_root, key.data(), key.size()),
+	                          yyjson_obj_getn(info_root, key.data(), key.size()), alc);
 }
 
 static void VariantAccessIndexFunc(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -2374,12 +2470,11 @@ void DatadocsExtension::LoadVariant(Connection &con) {
 	auto &casts = config.GetCastFunctions();
 	auto variant_to_any_cost = casts.ImplicitCastCost(DDVariantType, LogicalType::ANY);
 	const auto struct_type = LogicalType::STRUCT({{"any", LogicalType::ANY}});
-	auto variant_to_struct_cost = casts.ImplicitCastCost(DDVariantType, struct_type);
 	const auto list_type = LogicalType::LIST(LogicalType::ANY);
-	auto variant_to_list_cost = casts.ImplicitCastCost(DDVariantType, list_type);
+	casts.RegisterCastFunction(DDVariantType, DDVariantType, VariantToAnyCastBind, 0);
 	casts.RegisterCastFunction(DDVariantType, LogicalType::ANY, VariantToAnyCastBind, variant_to_any_cost);
-	casts.RegisterCastFunction(DDVariantType, struct_type, VariantToAnyCastBind, variant_to_struct_cost);
-	casts.RegisterCastFunction(DDVariantType, list_type, VariantToAnyCastBind, variant_to_list_cost);
+	casts.RegisterCastFunction(DDVariantType, struct_type, VariantToAnyCastBind, variant_to_any_cost);
+	casts.RegisterCastFunction(DDVariantType, list_type, VariantToAnyCastBind, variant_to_any_cost);
 
 	CreateScalarFunctionInfo variant_info(
 	    ScalarFunction("variant", {LogicalType::ANY}, DDVariantType, VariantFunction));
