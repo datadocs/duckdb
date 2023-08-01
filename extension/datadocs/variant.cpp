@@ -76,7 +76,7 @@ static LogicalType ConvertLogicalTypeFromString(std::string type) {
 		return LogicalType::VARCHAR;
 	} else if (type == "STRING[]") {
 		return LogicalType::LIST(LogicalType::VARCHAR);
-	} else if (type == "JSON") {
+	} else if (type == DDJsonType.GetAlias()) {
 		return DDJsonType;
 	} else if (type == "JSON[]") {
 		return LogicalType::LIST(DDJsonType);
@@ -124,6 +124,10 @@ static LogicalType ConvertLogicalTypeFromString(std::string type) {
 		return LogicalType::BLOB;
 	} else if (type == "BYTES[]") {
 		return LogicalType::LIST(LogicalType::BLOB);
+	} else if (type == VARIANT_TYPE_NAME) {
+		return DDVariantType;
+	} else if (type == VARIANT_TYPE_NAME + "[]") {
+		return LogicalType::LIST(DDVariantType);
 	}
 	return LogicalType::SQLNULL;
 }
@@ -471,17 +475,23 @@ private:
 	                                bool isList = false) {
 		yyjson_mut_val *root = nullptr;
 		if (isList) {
-			root = yyjson_mut_arr(doc);
-			for (const VectorReader &item : arg) {
-				if (type.GetAlias() == VARIANT_TYPE_NAME) {
-					if (item.IsNull()) {
-						yyjson_mut_arr_add_null(doc, root);
+			if (type.GetAlias() == VARIANT_TYPE_NAME || type.GetAlias() == DDJsonType.GetAlias() ||
+			    type.id() == LogicalTypeId::STRUCT || type.id() == LogicalTypeId::LIST) {
+				root = yyjson_mut_arr(doc);
+				for (const VectorReader &item : arg) {
+					if (type.GetAlias() == VARIANT_TYPE_NAME) {
+						if (item.IsNull()) {
+							yyjson_mut_arr_add_null(doc, root);
+						} else {
+							yyjson_mut_arr_append(root, ProcessTypeInfo(type, item, false, false));
+						}
 					} else {
 						yyjson_mut_arr_append(root, ProcessTypeInfo(type, item, false, false));
 					}
-				} else {
-					yyjson_mut_arr_append(root, ProcessTypeInfo(type, item, false, false));
 				}
+			} else if (!isRoot) {
+				string type_str = VariantTypeFromDuckdbType(LogicalType::LIST(type));
+				root = yyjson_mut_strncpy(doc, type_str.data(), type_str.size());
 			}
 			return root;
 		}
@@ -1843,31 +1853,41 @@ static bool VariantAccessWrite(VectorWriter &result, const VectorReader &arg, yy
 		case YYJSON_TYPE_BOOL | YYJSON_SUBTYPE_FALSE:
 			res_type = "BOOL";
 			break;
-		default:
-			res_type = "JSON";
-			break;
+		default: {
+			if (info && !yyjson_is_null(info)) {
+				if (yyjson_is_arr(info)) {
+					res_type = "VARIANT[]";
+				} else if (yyjson_is_obj(info)) {
+					res_type = "STRUCT";
+				} else if (yyjson_is_str(info)) {
+					res_type = yyjson_get_str(info);
+				}
+			} else {
+				res_type = "JSON";
+			}
+		} break;
 		}
 	} else {
 		res_type = arg_type.substr(0, arg_type.find('['));
+		if (res_type == VARIANT_TYPE_NAME) {
+			if (yyjson_is_arr(info)) {
+				res_type = "VARIANT[]";
+			} else if (yyjson_is_obj(info)) {
+				res_type = "STRUCT";
+			} else if (yyjson_is_str(info)) {
+				res_type = yyjson_get_str(info);
+			}
+		}
 	}
 
 	VectorStructWriter writer = result.SetStruct();
-	if (res_type == VARIANT_TYPE_NAME) {
-		if (yyjson_is_arr(info)) {
-			res_type = "JSON";
-		} else if (yyjson_is_obj(info)) {
-			res_type = "STRUCT";
-		} else if (yyjson_is_str(info)) {
-			res_type = yyjson_get_str(info);
-		}
-	}
 	writer[0].SetString(res_type);
 	auto res_doc = JSONCommon::CreateDocument(alc.GetYYAlc());
 	yyjson_mut_doc_set_root(res_doc, yyjson_val_mut_copy(res_doc, val));
 	size_t len;
 	char *data = yyjson_mut_write_opts(res_doc, 0, alc.GetYYAlc(), &len, nullptr);
 	writer[1].SetString(string_t(data, len));
-	if (!info || yyjson_is_null(info)) {
+	if (!info || yyjson_is_null(info) || yyjson_is_str(info)) {
 		writer[2].SetNull();
 	} else {
 		auto info_doc = JSONCommon::CreateDocument(alc.GetYYAlc());
@@ -1950,8 +1970,6 @@ static bool VariantListExtractImpl(VectorWriter &result, const VectorReader &arg
 		}
 		return VariantAccessWrite(result, arg, (yyjson_val *)root, nullptr, alc);
 	} else if (yyjson_is_arr(arg_root)) {
-		auto info_doc = JSONCommon::ReadDocument(arg[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
-		auto info_root = yyjson_doc_get_root(info_doc);
 		auto list_size = yyjson_arr_size(arg_root);
 		// 1-based indexing
 		if (idx == 0) {
@@ -1971,8 +1989,13 @@ static bool VariantListExtractImpl(VectorWriter &result, const VectorReader &arg
 			}
 			child_idx = idx;
 		}
-		return VariantAccessWrite(result, arg, yyjson_arr_get(arg_root, child_idx),
-		                          yyjson_arr_get(info_root, child_idx), alc);
+		yyjson_val *info = nullptr;
+		if (!arg[2].IsNull()) {
+			auto info_doc = JSONCommon::ReadDocument(arg[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+			auto info_root = yyjson_doc_get_root(info_doc);
+			info = yyjson_arr_get(info_root, child_idx);
+		}
+		return VariantAccessWrite(result, arg, yyjson_arr_get(arg_root, child_idx), info, alc);
 	} else {
 		throw NotImplementedException("Specifier type not implemented");
 		return false;
