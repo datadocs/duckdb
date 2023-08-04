@@ -369,6 +369,30 @@ public:
 		return true;
 	}
 
+	bool ProcessVal(VectorWriter &result, yyjson_val *val, yyjson_val *type_info) {
+		alc.Reset();
+		doc = JSONCommon::CreateDocument(alc.GetYYAlc());
+		yyjson_mut_val *root = yyjson_val_mut_copy(doc, val);
+		if (yyjson_mut_is_null(root)) {
+			return false;
+		}
+		VectorStructWriter writer = result.SetStruct();
+		writer[0].SetString(type_name);
+		yyjson_mut_doc_set_root(doc, root);
+		size_t len;
+		char *data = yyjson_mut_write_opts(doc, 0, alc.GetYYAlc(), &len, nullptr);
+		writer[1].SetString(string_t(data, len));
+		if (type_info && !yyjson_is_str(type_info)) {
+			yyjson_mut_doc_set_root(doc, yyjson_val_mut_copy(doc, type_info));
+			size_t len;
+			char *data = yyjson_mut_write_opts(doc, 0, alc.GetYYAlc(), &len, nullptr);
+			writer[2].SetString(string_t(data, len));
+		} else {
+			writer[2].SetNull();
+		}
+		return true;
+	}
+
 private:
 	yyjson_mut_val *ProcessValue(const VectorReader &arg) {
 		yyjson_mut_val *root;
@@ -1638,7 +1662,7 @@ struct VariantCasts {
 		auto alc = lstate.json_allocator.GetYYAlc();
 
 		bool success = true;
-		UnifiedVectorFormat vdata, infodata;
+		UnifiedVectorFormat vdata, infodata, valuedata;
 		source.ToUnifiedFormat(count, vdata);
 
 		auto &entries = StructVector::GetEntries(source);
@@ -1646,6 +1670,7 @@ struct VariantCasts {
 		auto type_data = FlatVector::GetData<string_t>(*entries[0]);
 		auto info_data = FlatVector::GetData<string_t>(*entries[2]);
 		entries[2]->ToUnifiedFormat(count, infodata);
+		entries[1]->ToUnifiedFormat(count, valuedata);
 
 		// Read documents
 		auto docs = JSONCommon::AllocateArray<yyjson_doc *>(alc, count);
@@ -1660,7 +1685,7 @@ struct VariantCasts {
 			} else {
 				infos[i] = ConvertLogicalTypeFromString(type_data[idx].GetString());
 			}
-			if (!vdata.validity.RowIsValid(idx)) {
+			if (!vdata.validity.RowIsValid(idx) || !valuedata.validity.RowIsValid(idx)) {
 				docs[i] = nullptr;
 				vals[i] = nullptr;
 				result_validity.SetInvalid(i);
@@ -2121,6 +2146,155 @@ static void VariantStructExtractFunc(DataChunk &args, ExpressionState &state, Ve
 	VectorExecute(args, result, VariantStructExtractImpl);
 }
 
+static void VariantArrayFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.data.size() == 1);
+	D_ASSERT(result.GetType() == LogicalType::LIST(DDVariantType));
+	JSONAllocator alc {Allocator::DefaultAllocator()};
+	auto source = args.data[0];
+	auto count = args.size();
+
+	auto result_child = ListVector::GetEntry(result);
+	UnifiedVectorFormat vdata;
+	source.ToUnifiedFormat(count, vdata);
+	auto &result_validity = FlatVector::Validity(result);
+	auto source_type = source.GetType();
+	if (source_type == DDVariantType) {
+		auto result_list_entries = FlatVector::GetData<list_entry_t>(result);
+		UnifiedVectorFormat vdata, infodata, valuedata;
+		source.ToUnifiedFormat(count, vdata);
+
+		auto &entries = StructVector::GetEntries(source);
+		auto value_data = FlatVector::GetData<string_t>(*entries[1]);
+		auto type_data = FlatVector::GetData<string_t>(*entries[0]);
+		auto info_data = FlatVector::GetData<string_t>(*entries[2]);
+		entries[2]->ToUnifiedFormat(count, infodata);
+		entries[1]->ToUnifiedFormat(count, valuedata);
+
+		// Read documents
+		auto docs = JSONCommon::AllocateArray<yyjson_doc *>(alc.GetYYAlc(), count);
+		auto vals = JSONCommon::AllocateArray<yyjson_val *>(alc.GetYYAlc(), count);
+		auto infos = JSONCommon::AllocateArray<yyjson_val *>(alc.GetYYAlc(), count);
+		vector<LogicalType> infos_type(count);
+		auto &result_validity = FlatVector::Validity(result);
+		idx_t offset = 0;
+		for (idx_t i = 0; i < count; i++) {
+			auto idx = vdata.sel->get_index(i);
+			if (infodata.validity.RowIsValid(idx)) {
+				auto type_info_doc = JSONCommon::ReadDocument(info_data[idx], JSONCommon::READ_FLAG, alc.GetYYAlc());
+				infos_type[i] = ConvertLogicalTypeFromJson(yyjson_doc_get_root(type_info_doc));
+			} else {
+				infos_type[i] = ConvertLogicalTypeFromString(type_data[idx].GetString());
+			}
+			if (!vdata.validity.RowIsValid(idx) || !valuedata.validity.RowIsValid(idx)) {
+				docs[i] = nullptr;
+				vals[i] = nullptr;
+				infos[i] = nullptr;
+				result_validity.SetInvalid(i);
+			} else {
+				docs[i] = JSONCommon::ReadDocument(value_data[idx], JSONCommon::READ_FLAG, alc.GetYYAlc());
+				vals[i] = yyjson_doc_get_root(docs[i]);
+				if (infodata.validity.RowIsValid(idx)) {
+					auto type_info_doc =
+					    JSONCommon::ReadDocument(info_data[idx], JSONCommon::READ_FLAG, alc.GetYYAlc());
+					infos[i] = yyjson_doc_get_root(type_info_doc);
+				} else {
+					infos[i] = nullptr;
+				}
+				const auto &arr = vals[i];
+				if (!arr || unsafe_yyjson_is_null(arr)) {
+					result_validity.SetInvalid(i);
+					continue;
+				}
+
+				if (!unsafe_yyjson_is_arr(arr)) {
+					result_validity.SetInvalid(i);
+					continue;
+				}
+
+				auto &entry = result_list_entries[i];
+				entry.offset = offset;
+				entry.length = unsafe_yyjson_get_len(arr);
+				offset += entry.length;
+			}
+		}
+		ListVector::SetListSize(result, offset);
+		ListVector::Reserve(result, offset);
+
+		// Initialize array for the nested values
+		auto nested_vals = JSONCommon::AllocateArray<yyjson_val *>(alc.GetYYAlc(), offset);
+		vector<yyjson_val *> nested_infos(offset);
+		vector<LogicalType> nested_infos_type(offset);
+
+		// Get array values
+		size_t idx, max;
+		yyjson_val *val;
+		idx_t list_i = 0;
+		for (idx_t i = 0; i < count; i++) {
+			if (!result_validity.RowIsValid(i)) {
+				continue; // We already marked this as invalid
+			}
+			yyjson_arr_foreach(vals[i], idx, max, val) {
+				nested_vals[list_i] = val;
+				if (infos[i] && yyjson_is_arr(infos[i])) {
+					nested_infos[list_i] = yyjson_arr_get(infos[i], idx);
+					nested_infos_type[list_i] = ConvertLogicalTypeFromJson(nested_infos[list_i]);
+				} else {
+					nested_infos[list_i] = nullptr;
+					nested_infos_type[list_i] = ListType::GetChildType(infos_type[i]);
+				}
+				list_i++;
+			}
+		}
+		D_ASSERT(list_i == offset);
+
+		for (idx_t i_row = 0; i_row < offset; ++i_row) {
+			VectorWriter writer(result_child, i_row);
+			VariantWriter variant_writer(nested_infos_type[i_row]);
+			if (!variant_writer.ProcessVal(writer, nested_vals[i_row], nested_infos[i_row])) {
+				writer.SetNull();
+			}
+		}
+	} else if (source_type.id() == LogicalTypeId::LIST) {
+		auto source_child_type = ListType::GetChildType(source_type);
+		auto result_list_entries = FlatVector::GetData<list_entry_t>(result);
+		auto source_list_entries = FlatVector::GetData<list_entry_t>(source);
+		idx_t offset = 0;
+		for (idx_t i = 0; i < count; i++) {
+			auto idx = vdata.sel->get_index(i);
+			if (vdata.validity.RowIsValid(idx)) {
+				auto &source_entry = source_list_entries[i];
+				auto &result_entry = result_list_entries[i];
+				result_entry.offset = source_entry.offset;
+				result_entry.length = source_entry.length;
+				offset += result_entry.length;
+			} else {
+				result_validity.SetInvalid(idx);
+			}
+		}
+		ListVector::SetListSize(result, offset);
+		ListVector::Reserve(result, offset);
+		auto source_child = ListVector::GetEntry(source);
+		VectorHolder holder(source_child, offset);
+		VectorReader reader(holder);
+		for (idx_t i_row = 0; i_row < offset; ++i_row) {
+			reader.SetRow(i_row);
+			VectorWriter writer(result_child, i_row);
+			VariantWriter variant_writer(source_child_type);
+			if (reader.IsNull() || !variant_writer.Process(writer, reader)) {
+				writer.SetNull();
+			}
+		}
+	} else {
+		result_validity.SetAllInvalid(count);
+	}
+
+	bool constant = (source.GetVectorType() == VectorType::CONSTANT_VECTOR);
+
+	if (constant) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
+}
+
 static void VariantListSliceFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.data[0].GetType() == DDVariantType);
 	VectorExecute<false>(args, result, VariantListSliceImpl);
@@ -2502,6 +2676,11 @@ void DatadocsExtension::LoadVariant(Connection &con) {
 	CreateScalarFunctionInfo variant_info(
 	    ScalarFunction("variant", {LogicalType::ANY}, DDVariantType, VariantFunction));
 	catalog.CreateFunction(context, variant_info);
+
+	// Function variant_array
+	CreateScalarFunctionInfo variant_array_info(
+	    ScalarFunction("variant_array", {LogicalType::ANY}, LogicalType::LIST(DDVariantType), VariantArrayFunc));
+	catalog.CreateFunction(context, variant_array_info);
 
 	REGISTER_FUNCTION(LogicalType::BOOLEAN, bool, Bool)
 	REGISTER_FUNCTION(LogicalType::BIGINT, int64, Int64)
