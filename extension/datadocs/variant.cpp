@@ -55,6 +55,7 @@ LogicalType getVariantType() {
 // 	{"__value", DDJsonType}
 // });
 const LogicalType DDVariantType = getVariantType();
+const LogicalType DDVariantArrayType = LogicalType::LIST(DDVariantType);
 // clang-format on
 
 namespace {
@@ -70,6 +71,7 @@ static bool TransformArray(yyjson_val *arrays[], yyjson_alc *alc, Vector &result
 static bool TransformObjectInternal(yyjson_val *objects[], yyjson_alc *alc, Vector &result, const idx_t count,
                                     JSONTransformOptions &options, vector<LogicalType> infos,
                                     CastParameters &parameters);
+static void TransformVariantArrayFunc(Vector &source, Vector &result, idx_t count);
 
 static LogicalType ConvertLogicalTypeFromString(std::string type) {
 	if (type == "STRING") {
@@ -127,7 +129,7 @@ static LogicalType ConvertLogicalTypeFromString(std::string type) {
 	} else if (type == VARIANT_TYPE_NAME) {
 		return DDVariantType;
 	} else if (type == VARIANT_TYPE_NAME + "[]") {
-		return LogicalType::LIST(DDVariantType);
+		return DDVariantArrayType;
 	}
 	return LogicalType::SQLNULL;
 }
@@ -1282,107 +1284,6 @@ static bool IsDatetime(LogicalType type) {
 	return false;
 }
 
-Vector GetVariantVector(VectorReader reader, string type) {
-	Vector res(ConvertLogicalTypeFromString(type));
-	if (type == "STRING") {
-		VectorCastExecute(reader, res, VariantReaderString(), 0, &VariantReaderString::ProcessScalar);
-		return res;
-	} else if (type == "STRING[]") {
-		VectorCastExecute(reader, res, VariantReaderString(), 0, &VariantReaderString::ProcessList);
-		return res;
-	} else if (type == "JSON") {
-		VectorCastExecute(reader, res, VariantReaderJSON(), 0, &VariantReaderJSON::ProcessScalar);
-		return res;
-	} else if (type == "JSON[]") {
-		VectorCastExecute(reader, res, VariantReaderJSON(), 0, &VariantReaderJSON::ProcessList);
-		return res;
-	} else if (type == "INT64") {
-		VectorCastExecute(reader, res, VariantReaderInt64(), 0, &VariantReaderInt64::ProcessScalar);
-		return res;
-	} else if (type == "INT64[]") {
-		VectorCastExecute(reader, res, VariantReaderInt64(), 0, &VariantReaderInt64::ProcessList);
-		return res;
-	} else if (type == "BOOL") {
-		VectorCastExecute(reader, res, VariantReaderBool(), 0, &VariantReaderBool::ProcessScalar);
-		return res;
-	} else if (type == "BOOL[]") {
-		VectorCastExecute(reader, res, VariantReaderBool(), 0, &VariantReaderBool::ProcessList);
-		return res;
-	} else if (type == "FLOAT64") {
-		VectorCastExecute(reader, res, VariantReaderFloat64(), 0, &VariantReaderFloat64::ProcessScalar);
-		return res;
-	} else if (type == "FLOAT64[]") {
-		VectorCastExecute(reader, res, VariantReaderFloat64(), 0, &VariantReaderFloat64::ProcessList);
-		return res;
-	} else if (type == "NUMERIC") {
-		VectorCastExecute(reader, res, VariantReaderNumeric(), 0, &VariantReaderNumeric::ProcessScalar);
-		return res;
-	} else if (type == "NUMERIC[]") {
-		VectorCastExecute(reader, res, VariantReaderNumeric(), 0, &VariantReaderNumeric::ProcessList);
-		return res;
-	} else if (type == "DATE") {
-		VectorCastExecute(reader, res, VariantReaderDate(), 0, &VariantReaderDate::ProcessScalar);
-		return res;
-	} else if (type == "DATE[]") {
-		VectorCastExecute(reader, res, VariantReaderDate(), 0, &VariantReaderDate::ProcessList);
-		return res;
-	} else if (type == "TIME") {
-		VectorCastExecute(reader, res, VariantReaderTime(), 0, &VariantReaderTime::ProcessScalar);
-		return res;
-	} else if (type == "TIME[]") {
-		VectorCastExecute(reader, res, VariantReaderTime(), 0, &VariantReaderTime::ProcessList);
-		return res;
-	} else if (type == "DATETIME") {
-		VectorCastExecute(reader, res, VariantReaderDatetime(), 0, &VariantReaderDatetime::ProcessScalar);
-		return res;
-	} else if (type == "DATETIME[]") {
-		VectorCastExecute(reader, res, VariantReaderDatetime(), 0, &VariantReaderDatetime::ProcessList);
-		return res;
-	} else if (type == "TIMESTAMP") {
-		VectorCastExecute(reader, res, VariantReaderTimestamp(), 0, &VariantReaderTimestamp::ProcessScalar);
-		return res;
-	} else if (type == "TIMESTAMP[]") {
-		VectorCastExecute(reader, res, VariantReaderTimestamp(), 0, &VariantReaderTimestamp::ProcessList);
-		return res;
-	} else if (type == "INTERVAL") {
-		VectorCastExecute(reader, res, VariantReaderInterval(), 0, &VariantReaderInterval::ProcessScalar);
-		return res;
-	} else if (type == "INTERVAL[]") {
-		VectorCastExecute(reader, res, VariantReaderInterval(), 0, &VariantReaderInterval::ProcessList);
-		return res;
-	} else if (type == "GEOGRAPHY") {
-		VectorCastExecute(reader, res, VariantReaderGeography(), 0, &VariantReaderGeography::ProcessScalar);
-		return res;
-	} else if (type == "GEOGRAPHY[]") {
-		VectorCastExecute(reader, res, VariantReaderGeography(), 0, &VariantReaderGeography::ProcessList);
-		return res;
-	} else if (type == "BYTES") {
-		VectorCastExecute(reader, res, VariantReaderBytes(), 0, &VariantReaderBytes::ProcessScalar);
-		return res;
-	} else if (type == "BYTES[]") {
-		VectorCastExecute(reader, res, VariantReaderBytes(), 0, &VariantReaderBytes::ProcessList);
-		return res;
-	} else if (type == "STRUCT") {
-		JSONAllocator alc {Allocator::DefaultAllocator()};
-		auto doc = JSONCommon::ReadDocument(reader[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
-		auto type_info = yyjson_doc_get_root(doc);
-		auto logicaltype = ConvertLogicalTypeFromJson(type_info);
-		Vector res(logicaltype);
-		VectorCastExecute(reader, res, VariantReaderStruct(), 0, &VariantReaderStruct::ProcessScalar);
-		return res;
-	} else if (type == "STRUCT[]") {
-		JSONAllocator alc {Allocator::DefaultAllocator()};
-		auto doc = JSONCommon::ReadDocument(reader[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
-		auto type_info = yyjson_doc_get_root(doc);
-		auto logicaltype = ConvertLogicalTypeFromJson(type_info);
-		Vector res(logicaltype);
-		VectorCastExecute(reader, res, VariantReaderStruct(), 0, &VariantReaderStruct::ProcessList);
-		return res;
-	}
-
-	return Vector(LogicalType::VARCHAR);
-}
-
 bool TryCastVariant(Value val, Vector &result, idx_t &idx, CastParameters &parameters) {
 	auto source = val.type();
 	auto target = result.GetType();
@@ -1702,6 +1603,26 @@ struct VariantCasts {
 		if (constant) {
 			result.SetVectorType(VectorType::CONSTANT_VECTOR);
 		}
+		return success;
+	}
+
+	static bool AnyCastToVariant(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+		bool success = true;
+		D_ASSERT(result.GetType() == DDVariantType);
+		VectorHolder holder(source, count);
+		VectorReader reader(holder);
+		VariantWriter writer(source.GetType());
+		for (idx_t i_row = 0; i_row < count; i_row++) {
+			reader.SetRow(i_row);
+			VectorCastExecute(reader, result, writer, i_row, &VariantWriter::Process);
+		}
+		return success;
+	}
+
+	static bool AnyCastToVariantArray(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+		bool success = true;
+		D_ASSERT(result.GetType() == DDVariantArrayType);
+		TransformVariantArrayFunc(source, result, count);
 		return success;
 	}
 };
@@ -2146,13 +2067,8 @@ static void VariantStructExtractFunc(DataChunk &args, ExpressionState &state, Ve
 	VectorExecute(args, result, VariantStructExtractImpl);
 }
 
-static void VariantArrayFunc(DataChunk &args, ExpressionState &state, Vector &result) {
-	D_ASSERT(args.data.size() == 1);
-	D_ASSERT(result.GetType() == LogicalType::LIST(DDVariantType));
+static void TransformVariantArrayFunc(Vector &source, Vector &result, idx_t count) {
 	JSONAllocator alc {Allocator::DefaultAllocator()};
-	auto source = args.data[0];
-	auto count = args.size();
-
 	auto result_child = ListVector::GetEntry(result);
 	UnifiedVectorFormat vdata;
 	source.ToUnifiedFormat(count, vdata);
@@ -2160,8 +2076,7 @@ static void VariantArrayFunc(DataChunk &args, ExpressionState &state, Vector &re
 	auto source_type = source.GetType();
 	if (source_type == DDVariantType) {
 		auto result_list_entries = FlatVector::GetData<list_entry_t>(result);
-		UnifiedVectorFormat vdata, infodata, valuedata;
-		source.ToUnifiedFormat(count, vdata);
+		UnifiedVectorFormat infodata, valuedata;
 
 		auto &entries = StructVector::GetEntries(source);
 		auto value_data = FlatVector::GetData<string_t>(*entries[1]);
@@ -2175,7 +2090,6 @@ static void VariantArrayFunc(DataChunk &args, ExpressionState &state, Vector &re
 		auto vals = JSONCommon::AllocateArray<yyjson_val *>(alc.GetYYAlc(), count);
 		auto infos = JSONCommon::AllocateArray<yyjson_val *>(alc.GetYYAlc(), count);
 		vector<LogicalType> infos_type(count);
-		auto &result_validity = FlatVector::Validity(result);
 		idx_t offset = 0;
 		for (idx_t i = 0; i < count; i++) {
 			auto idx = vdata.sel->get_index(i);
@@ -2287,10 +2201,45 @@ static void VariantArrayFunc(DataChunk &args, ExpressionState &state, Vector &re
 	} else {
 		result_validity.SetAllInvalid(count);
 	}
+}
 
-	bool constant = (source.GetVectorType() == VectorType::CONSTANT_VECTOR);
+static void VariantArrayFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.data.size() == 1);
+	D_ASSERT(result.GetType() == DDVariantArrayType);
+	auto source = args.data[0];
+	auto count = args.size();
 
-	if (constant) {
+	TransformVariantArrayFunc(source, result, count);
+
+	if (source.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	}
+}
+
+template <LogicalType const &T>
+static void IsVariantFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.data.size() == 1);
+	D_ASSERT(result.GetType() == LogicalType::BOOLEAN);
+	auto source = args.data[0];
+	auto count = args.size();
+	auto source_type = source.GetType();
+	auto result_data = FlatVector::GetData<bool>(result);
+	bool is_variant = source_type == T;
+
+	UnifiedVectorFormat vdata;
+	source.ToUnifiedFormat(count, vdata);
+	auto &result_validity = FlatVector::Validity(result);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto idx = vdata.sel->get_index(i);
+		if (vdata.validity.RowIsValid(idx)) {
+			result_data[i] = is_variant;
+		} else {
+			result_validity.SetInvalid(idx);
+		}
+	}
+
+	if (source.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 		result.SetVectorType(VectorType::CONSTANT_VECTOR);
 	}
 }
@@ -2652,6 +2601,14 @@ BoundCastInfo VariantToAnyCastBind(BindCastInput &input, const LogicalType &sour
 	return BoundCastInfo(VariantCasts::VariantCastAny, nullptr, JSONFunctionLocalState::InitCastLocalState);
 }
 
+BoundCastInfo AnyToVariantCastBind(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	return BoundCastInfo(VariantCasts::AnyCastToVariant);
+}
+
+BoundCastInfo AnyToVariantArrayCastBind(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	return BoundCastInfo(VariantCasts::AnyCastToVariantArray);
+}
+
 void DatadocsExtension::LoadVariant(Connection &con) {
 	auto &context = *con.context;
 	auto &catalog = Catalog::GetSystemCatalog(context);
@@ -2673,14 +2630,44 @@ void DatadocsExtension::LoadVariant(Connection &con) {
 	casts.RegisterCastFunction(DDVariantType, struct_type, VariantToAnyCastBind, variant_to_any_cost);
 	casts.RegisterCastFunction(DDVariantType, list_type, VariantToAnyCastBind, variant_to_any_cost);
 
+	auto any_to_variant_cost = casts.ImplicitCastCost(LogicalType::ANY, DDVariantType);
+	casts.RegisterCastFunction(LogicalType::ANY, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
+	casts.RegisterCastFunction(LogicalType::VARCHAR, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
+	casts.RegisterCastFunction(DDJsonType, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
+	casts.RegisterCastFunction(list_type, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
+	casts.RegisterCastFunction(struct_type, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
+
+	auto any_to_variant_array_cost = casts.ImplicitCastCost(LogicalType::ANY, DDVariantArrayType);
+	casts.RegisterCastFunction(LogicalType::ANY, DDVariantArrayType, AnyToVariantArrayCastBind,
+	                           any_to_variant_array_cost);
+	casts.RegisterCastFunction(LogicalType::VARCHAR, DDVariantArrayType, AnyToVariantArrayCastBind,
+	                           any_to_variant_array_cost);
+	casts.RegisterCastFunction(DDJsonType, DDVariantArrayType, AnyToVariantArrayCastBind, any_to_variant_array_cost);
+	casts.RegisterCastFunction(list_type, DDVariantArrayType, AnyToVariantArrayCastBind, any_to_variant_array_cost);
+	casts.RegisterCastFunction(struct_type, DDVariantArrayType, AnyToVariantArrayCastBind, any_to_variant_array_cost);
+	casts.RegisterCastFunction(DDVariantType, DDVariantArrayType, AnyToVariantArrayCastBind, any_to_variant_array_cost);
+
 	CreateScalarFunctionInfo variant_info(
 	    ScalarFunction("variant", {LogicalType::ANY}, DDVariantType, VariantFunction));
 	catalog.CreateFunction(context, variant_info);
 
 	// Function variant_array
 	CreateScalarFunctionInfo variant_array_info(
-	    ScalarFunction("variant_array", {LogicalType::ANY}, LogicalType::LIST(DDVariantType), VariantArrayFunc));
+	    ScalarFunction("variant_array", {LogicalType::ANY}, DDVariantArrayType, VariantArrayFunc));
 	catalog.CreateFunction(context, variant_array_info);
+
+	// Function is_variant and is_variant_array
+	auto is_variant_func =
+	    ScalarFunction("is_variant", {LogicalType::ANY}, LogicalType::BOOLEAN, IsVariantFunc<DDVariantType>);
+	is_variant_func.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	CreateScalarFunctionInfo is_variant_info(is_variant_func);
+	catalog.CreateFunction(context, is_variant_info);
+
+	auto is_variant_array_func =
+	    ScalarFunction("is_variant_array", {LogicalType::ANY}, LogicalType::BOOLEAN, IsVariantFunc<DDVariantArrayType>);
+	is_variant_array_func.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	CreateScalarFunctionInfo is_variant_array_info(is_variant_array_func);
+	catalog.CreateFunction(context, is_variant_array_info);
 
 	REGISTER_FUNCTION(LogicalType::BOOLEAN, bool, Bool)
 	REGISTER_FUNCTION(LogicalType::BIGINT, int64, Int64)
