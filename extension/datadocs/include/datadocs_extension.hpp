@@ -13,6 +13,7 @@ private:
 	void LoadGeo(Connection &con);
 	void LoadVariant(Connection &con);
 	void LoadIngest(Connection &con);
+	void LoadParseNum(Connection &con);
 };
 
 } // namespace duckdb
