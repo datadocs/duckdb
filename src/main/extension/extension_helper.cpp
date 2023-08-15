@@ -437,6 +437,11 @@ void ExtensionHelper::LoadAllExtensions(DuckDB &db) {
 		LoadExtensionInternal(db, ext, true);
 	}
 #endif
+	vector<string> belate_extensions {"datadocs"};
+
+	for (auto &ext : belate_extensions) {
+		LoadExtensionInternal(db, ext, true);
+	}
 }
 
 ExtensionLoadResult ExtensionHelper::LoadExtension(DuckDB &db, const std::string &extension) {

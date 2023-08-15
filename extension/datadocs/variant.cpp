@@ -62,15 +62,16 @@ namespace {
 
 using namespace std::placeholders;
 
-static bool VariantReadScalar(VectorWriter &result, yyjson_val *val, LogicalType type);
+static bool VariantReadScalar(VectorWriter &result, yyjson_val *val, LogicalType type, bool is_list, yyjson_val *info);
 bool TransformToJSON(yyjson_val *vals[], yyjson_alc *alc, Vector &result, const idx_t count);
 static bool TransformInternal(yyjson_val *vals[], Vector &result, const idx_t count, JSONTransformOptions &options,
-                              vector<LogicalType> infos, CastParameters &parameters);
+                              vector<LogicalType> infos, CastParameters &parameters, vector<yyjson_val *> extra_infos);
 static bool TransformArray(yyjson_val *arrays[], yyjson_alc *alc, Vector &result, const idx_t count,
-                           JSONTransformOptions &options, vector<LogicalType> infos, CastParameters &parameters);
+                           JSONTransformOptions &options, vector<LogicalType> infos, CastParameters &parameters,
+                           vector<yyjson_val *> extra_infos);
 static bool TransformObjectInternal(yyjson_val *objects[], yyjson_alc *alc, Vector &result, const idx_t count,
                                     JSONTransformOptions &options, vector<LogicalType> infos,
-                                    CastParameters &parameters);
+                                    CastParameters &parameters, vector<yyjson_val *> extra_infos);
 static void TransformVariantArrayFunc(Vector &source, Vector &result, idx_t count);
 
 static LogicalType ConvertLogicalTypeFromString(std::string type) {
@@ -141,9 +142,17 @@ static LogicalType ConvertLogicalTypeFromJson(yyjson_val *type_info) {
 	} else if (yyjson_is_arr(type_info)) {
 		size_t idx, max;
 		yyjson_val *val;
+		bool is_uniform = true;
+		LogicalType uniform_type;
 		yyjson_arr_foreach(type_info, idx, max, val) {
-			return LogicalType::LIST(ConvertLogicalTypeFromJson(val));
+			auto current_type = ConvertLogicalTypeFromJson(val);
+			if (idx == 0) {
+				uniform_type = current_type;
+			} else if (current_type != uniform_type) {
+				return DDVariantArrayType;
+			}
 		}
+		return LogicalType::LIST(uniform_type);
 	} else if (yyjson_is_obj(type_info)) {
 		child_list_t<LogicalType> child_types;
 		size_t idx, max;
@@ -739,12 +748,10 @@ private:
 		idx_t i = 0;
 		for (auto &[child_key, child_type] : StructType::GetChildTypes(*type)) {
 			const VectorReader item = arg[i++];
-			yyjson_mut_val *val =
-			    item.IsNull() ? yyjson_mut_null(doc) : VariantWriter(child_type, doc).ProcessValue(item);
 			if (child_key == VARIANT_TYPE_KEY && !is_list) {
-				type_name = yyjson_mut_get_str(val);
+				type_name = std::string(item.GetString()).c_str();
 			} else if (child_key == VARIANT_VALUE_KEY) {
-				obj = val;
+				obj = item.IsNull() ? yyjson_mut_null(doc) : VariantWriter(child_type, doc).ProcessValue(item);
 			}
 		}
 		return obj;
@@ -796,6 +803,7 @@ static void VariantFunction(DataChunk &args, ExpressionState &state, Vector &res
 class VariantReaderBase {
 protected:
 	LogicalType type_info = LogicalType::SQLNULL;
+	yyjson_val *extra_info = nullptr;
 
 public:
 	bool ProcessScalar(VectorWriter &result, const VectorReader &arg) {
@@ -805,7 +813,8 @@ public:
 		if (!arg[2].IsNull()) {
 			auto type_info_doc =
 			    JSONCommon::ReadDocument(arg[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
-			type_info = ConvertLogicalTypeFromJson(yyjson_doc_get_root(type_info_doc));
+			extra_info = yyjson_doc_get_root(type_info_doc);
+			type_info = ConvertLogicalTypeFromJson(extra_info);
 		}
 		return ReadScalar(result, val);
 	}
@@ -814,6 +823,10 @@ public:
 		alc.Reset();
 		auto doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
 		auto root = yyjson_doc_get_root(doc);
+		return ReadList(result, root);
+	}
+
+	bool ReadList(VectorWriter &result, yyjson_val *root) {
 		yyjson_arr_iter iter;
 		if (!yyjson_arr_iter_init(root, &iter)) {
 			return false;
@@ -1169,8 +1182,9 @@ public:
 
 class VariantReaderStruct : public VariantReaderBase {
 public:
-	VariantReaderStruct(LogicalType type = LogicalType::SQLNULL) {
+	VariantReaderStruct(LogicalType type = LogicalType::SQLNULL, yyjson_val *info = nullptr) {
 		type_info = type;
+		extra_info = info;
 	}
 
 	bool ProcessScalar(VectorWriter &result, const VectorReader &arg) {
@@ -1195,8 +1209,10 @@ public:
 		VectorStructWriter struct_vector = result.SetStruct();
 		idx_t i = 0;
 		for (auto &[child_key, child_type] : child_types) {
+			auto child_info = yyjson_obj_getn(extra_info, child_key.data(), child_key.size());
 			auto writer = struct_vector[i];
-			if (!VariantReadScalar(writer, (yyjson_obj_getn(val, child_key.data(), child_key.size())), child_type)) {
+			if (!VariantReadScalar(writer, (yyjson_obj_getn(val, child_key.data(), child_key.size())), child_type,
+			                       false, child_info)) {
 				writer.SetNull();
 			}
 			i++;
@@ -1205,7 +1221,7 @@ public:
 	}
 };
 
-static bool VariantReadScalar(VectorWriter &result, yyjson_val *val, LogicalType type) {
+static bool VariantReadScalar(VectorWriter &result, yyjson_val *val, LogicalType type, bool is_list, yyjson_val *info) {
 	switch (type.id()) {
 	case LogicalType::TINYINT:
 	case LogicalType::UTINYINT:
@@ -1214,49 +1230,82 @@ static bool VariantReadScalar(VectorWriter &result, yyjson_val *val, LogicalType
 	case LogicalType::INTEGER:
 	case LogicalType::UINTEGER:
 	case LogicalType::BIGINT:
-	case LogicalType::UBIGINT:
-		return VariantReaderInt64().ReadScalar(result, val);
+	case LogicalType::UBIGINT: {
+		return is_list ? VariantReaderInt64().ReadList(result, val) : VariantReaderInt64().ReadScalar(result, val);
+	}
 
 	case LogicalType::VARCHAR: {
 		if (type.GetAlias() == JSONCommon::JSON_TYPE_NAME) {
-			return VariantReaderJSON().ReadScalar(result, val);
+			return is_list ? VariantReaderJSON().ReadList(result, val) : VariantReaderJSON().ReadScalar(result, val);
 		} else {
-			return VariantReaderString().ReadScalar(result, val);
+			return is_list ? VariantReaderString().ReadList(result, val)
+			               : VariantReaderString().ReadScalar(result, val);
 		}
 	} break;
 	case LogicalType::FLOAT:
 	case LogicalType::DOUBLE: {
-		return VariantReaderFloat64().ReadScalar(result, val);
+		return is_list ? VariantReaderFloat64().ReadList(result, val) : VariantReaderFloat64().ReadScalar(result, val);
 	} break;
 	case LogicalTypeId::DECIMAL: {
-		return VariantReaderNumeric().ReadScalar(result, val);
+		return is_list ? VariantReaderNumeric().ReadList(result, val) : VariantReaderNumeric().ReadScalar(result, val);
 	} break;
 	case LogicalType::DATE: {
-		return VariantReaderDate().ReadScalar(result, val);
+		return is_list ? VariantReaderDate().ReadList(result, val) : VariantReaderDate().ReadScalar(result, val);
 	} break;
 	case LogicalType::TIMESTAMP:
 	case LogicalType::TIMESTAMP_TZ: {
-		return VariantReaderDatetime().ReadScalar(result, val);
+		return is_list ? VariantReaderDatetime().ReadList(result, val)
+		               : VariantReaderDatetime().ReadScalar(result, val);
 	} break;
 	case LogicalType::TIME: {
-		return VariantReaderTime().ReadScalar(result, val);
+		return is_list ? VariantReaderTime().ReadList(result, val) : VariantReaderTime().ReadScalar(result, val);
 	} break;
 	// Cast for Interval, BLOB and GEOGRAPHY
 	case LogicalType::BLOB: {
 		if (type.GetAlias() == "GEOGRAPHY") {
-			return VariantReaderGeography().ReadScalar(result, val);
+			return is_list ? VariantReaderGeography().ReadList(result, val)
+			               : VariantReaderGeography().ReadScalar(result, val);
 		} else {
-			return VariantReaderBytes().ReadScalar(result, val);
+			return is_list ? VariantReaderBytes().ReadList(result, val) : VariantReaderBytes().ReadScalar(result, val);
 		}
 	} break;
 	case LogicalType::INTERVAL: {
-		return VariantReaderInterval().ReadScalar(result, val);
+		return is_list ? VariantReaderInterval().ReadList(result, val)
+		               : VariantReaderInterval().ReadScalar(result, val);
 	} break;
 	case LogicalTypeId::LIST: {
-		// Handle later
+		return VariantReadScalar(result, val, ListType::GetChildType(type), true, info);
 	} break;
 	case LogicalTypeId::STRUCT: {
-		return VariantReaderStruct(type).ReadScalar(result, val);
+		if (type.GetAlias() == VARIANT_TYPE_NAME) {
+			if (is_list) {
+				yyjson_arr_iter iter;
+				if (!yyjson_arr_iter_init(val, &iter)) {
+					return false;
+				}
+				VectorListWriter list_writer = result.SetList();
+				yyjson_val *child_val;
+				idx_t idx = 0;
+				while (child_val = yyjson_arr_iter_next(&iter)) {
+					VectorWriter item = list_writer.Append();
+					yyjson_val *child_info = info ? yyjson_arr_get(info, idx) : nullptr;
+					auto child_type = ConvertLogicalTypeFromJson(child_info);
+					VariantWriter variant_writer(child_type);
+					if (!variant_writer.ProcessVal(item, child_val, child_info)) {
+						item.SetNull();
+					}
+					idx++;
+				}
+				return true;
+			} else {
+				VariantWriter variant_writer(DDVariantType);
+				if (!variant_writer.ProcessVal(result, val, info)) {
+					result.SetNull();
+				}
+			}
+		}
+		return is_list ? VariantReaderStruct(type, info).ReadList(result, val)
+		               : VariantReaderStruct(type, info).ReadScalar(result, val);
 	} break;
 	default:
 		break;
@@ -1284,18 +1333,19 @@ static bool IsDatetime(LogicalType type) {
 	return false;
 }
 
-bool TryCastVariant(Value val, Vector &result, idx_t &idx, CastParameters &parameters) {
-	auto source = val.type();
+bool TryCastVariant(Vector source, Vector &result, idx_t &idx, CastParameters &parameters, idx_t i_row) {
+	auto val = source.GetValue(i_row);
+	auto source_type = val.type();
 	auto target = result.GetType();
 	switch (target.id()) {
 	case LogicalType::VARCHAR: {
 		string tempVal;
-		if (target.GetAlias() == JSONCommon::JSON_TYPE_NAME && source.GetAlias() == JSONCommon::JSON_TYPE_NAME) {
+		if (target.GetAlias() == JSONCommon::JSON_TYPE_NAME && source_type.GetAlias() == JSONCommon::JSON_TYPE_NAME) {
 			// Handle for JSON
 			tempVal = val.ToString();
-		} else if (source.id() == LogicalType::VARCHAR) {
+		} else if (source_type.id() == LogicalType::VARCHAR) {
 			tempVal = val.ToString();
-		} else if (source == DDGeoType) {
+		} else if (source_type == DDGeoType) {
 			tempVal = Geometry::GetString(val.GetValueUnsafe<string_t>(), DataFormatType::FORMAT_VALUE_TYPE_WKT);
 		} else {
 			tempVal = val.ToString();
@@ -1312,78 +1362,90 @@ bool TryCastVariant(Value val, Vector &result, idx_t &idx, CastParameters &param
 	case LogicalType::UINTEGER:
 	case LogicalType::BIGINT:
 	case LogicalType::UBIGINT: {
-		if (source.IsNumeric()) {
+		if (source_type.IsNumeric()) {
 			result.SetValue(idx, Value::Numeric(target, val.GetValue<int64_t>()));
 			return true;
 		} else {
-			return VariantError(source, parameters.error_message, target);
+			return VariantError(source_type, parameters.error_message, target);
 		}
 	} break;
 	case LogicalType::FLOAT:
 	case LogicalType::DOUBLE: {
-		if (source.IsNumeric()) {
+		if (source_type.IsNumeric()) {
 			result.SetValue(idx, Value(val.GetValue<double>()));
 			return true;
 		} else {
-			return VariantError(source, parameters.error_message, target);
+			return VariantError(source_type, parameters.error_message, target);
 		}
 	} break;
 	case LogicalTypeId::DECIMAL: {
-		if (source.IsNumeric()) {
+		if (source_type.IsNumeric()) {
 			result.SetValue(idx, val);
 			return true;
 		} else {
-			return VariantError(source, parameters.error_message, target);
+			return VariantError(source_type, parameters.error_message, target);
 		}
 	} break;
 	case LogicalType::DATE:
 	case LogicalType::TIMESTAMP:
 	case LogicalType::TIMESTAMP_TZ: {
-		if (IsDatetime(source) && source.id() != LogicalType::TIME) {
+		if (IsDatetime(source_type) && source_type.id() != LogicalType::TIME) {
 			result.SetValue(idx, val);
 			return true;
 		} else {
-			return VariantError(source, parameters.error_message, target);
+			return VariantError(source_type, parameters.error_message, target);
 		}
 	} break;
 	case LogicalType::TIME: {
-		if (IsDatetime(source) && source.id() != LogicalType::DATE) {
+		if (IsDatetime(source_type) && source_type.id() != LogicalType::DATE) {
 			result.SetValue(idx, val);
 			return true;
 		} else {
-			return VariantError(source, parameters.error_message, target);
+			return VariantError(source_type, parameters.error_message, target);
 		}
 	} break;
 	// Cast for Interval, BLOB and GEOGRAPHY
 	case LogicalType::BLOB:
 	case LogicalType::INTERVAL: {
-		if (source == target) {
+		if (source_type == target) {
 			result.SetValue(idx, val);
 			return true;
 		} else {
-			return VariantError(source, parameters.error_message, target);
+			return VariantError(source_type, parameters.error_message, target);
 		}
 	} break;
 	case LogicalTypeId::LIST: {
 
 	} break;
 	case LogicalTypeId::STRUCT: {
-		if (source.id() != LogicalTypeId::STRUCT) {
-			return VariantError(source, parameters.error_message, target);
-		}
-		auto source_child_types = StructType::GetChildTypes(source);
-		auto result_child_types = StructType::GetChildTypes(target);
-		if (source_child_types.size() != result_child_types.size()) {
-			HandleCastError::AssignError("Cannot cast variant of STRUCT and STRUCT of different size",
-			                             parameters.error_message);
-			return false;
-		}
-
-		auto &struct_children = StructValue::GetChildren(val);
-		auto &child_vectors = StructVector::GetEntries(result);
-		for (idx_t i = 0; i < source_child_types.size(); i++) {
-			if (!TryCastVariant(struct_children[i], *child_vectors[i], idx, parameters)) {
+		if (target.GetAlias() == VARIANT_TYPE_NAME) {
+			VectorHolder holder(source, i_row + 1);
+			VectorReader reader(holder);
+			reader.SetRow(i_row);
+			VectorWriter writer(result, idx);
+			VariantWriter variant_writer(source_type);
+			if (reader.IsNull() || !variant_writer.Process(writer, reader)) {
+				writer.SetNull();
+			}
+		} else {
+			if (source_type.id() != LogicalTypeId::STRUCT) {
+				return VariantError(source_type, parameters.error_message, target);
+			}
+			auto source_child_types = StructType::GetChildTypes(source_type);
+			auto result_child_types = StructType::GetChildTypes(target);
+			if (source_child_types.size() != result_child_types.size()) {
+				HandleCastError::AssignError("Cannot cast variant of STRUCT and STRUCT of different size",
+				                             parameters.error_message);
 				return false;
+			}
+
+			// auto &struct_children = StructValue::GetChildren(val);
+			auto &source_child_vectors = StructVector::GetEntries(source);
+			auto &child_vectors = StructVector::GetEntries(result);
+			for (idx_t i = 0; i < source_child_types.size(); i++) {
+				if (!TryCastVariant(*source_child_vectors[i], *child_vectors[i], idx, parameters, i_row)) {
+					return false;
+				}
 			}
 		}
 		return true;
@@ -1394,7 +1456,8 @@ bool TryCastVariant(Value val, Vector &result, idx_t &idx, CastParameters &param
 
 struct VariantCasts {
 	static bool Transform(yyjson_val *vals[], yyjson_alc *alc, Vector &result, const idx_t count,
-	                      JSONTransformOptions &options, vector<LogicalType> infos, CastParameters &parameters) {
+	                      JSONTransformOptions &options, vector<LogicalType> infos, CastParameters &parameters,
+	                      vector<yyjson_val *> extra_infos) {
 		auto result_type = result.GetType();
 
 		if (JSONCommon::LogicalTypeIsJSON(result_type)) {
@@ -1429,11 +1492,16 @@ struct VariantCasts {
 		case LogicalTypeId::UUID:
 		case LogicalTypeId::VARCHAR:
 		case LogicalTypeId::BLOB:
-			return TransformInternal(vals, result, count, options, infos, parameters);
-		case LogicalTypeId::STRUCT:
-			return TransformObjectInternal(vals, alc, result, count, options, infos, parameters);
+			return TransformInternal(vals, result, count, options, infos, parameters, extra_infos);
+		case LogicalTypeId::STRUCT: {
+			if (result_type.GetAlias() == VARIANT_TYPE_NAME) {
+				return TransformInternal(vals, result, count, options, infos, parameters, extra_infos);
+			} else {
+				return TransformObjectInternal(vals, alc, result, count, options, infos, parameters, extra_infos);
+			}
+		} break;
 		case LogicalTypeId::LIST:
-			return TransformArray(vals, alc, result, count, options, infos, parameters);
+			return TransformArray(vals, alc, result, count, options, infos, parameters, extra_infos);
 		// case LogicalTypeId::MAP:
 		// 	return TransformObjectToMap(vals, alc, result, count, options);
 		default:
@@ -1443,7 +1511,8 @@ struct VariantCasts {
 
 	static bool TransformObject(yyjson_val *objects[], yyjson_alc *alc, const idx_t count, const vector<string> &names,
 	                            const vector<Vector *> &result_vectors, JSONTransformOptions &options,
-	                            vector<LogicalType> infos, CastParameters &parameters) {
+	                            vector<LogicalType> infos, CastParameters &parameters,
+	                            vector<yyjson_val *> extra_infos) {
 		D_ASSERT(alc);
 		D_ASSERT(names.size() == result_vectors.size());
 		const idx_t column_count = names.size();
@@ -1453,10 +1522,12 @@ struct VariantCasts {
 		vector<yyjson_val **> nested_vals;
 		nested_vals.reserve(column_count);
 		vector<vector<LogicalType>> nested_info_vec(column_count);
+		vector<vector<yyjson_val *>> nested_extra_info_vec(column_count);
 		for (idx_t col_idx = 0; col_idx < column_count; col_idx++) {
 			key_map.insert({{names[col_idx].c_str(), names[col_idx].length()}, col_idx});
 			nested_vals.push_back(JSONCommon::AllocateArray<yyjson_val *>(alc, count));
 			nested_info_vec[col_idx] = vector<LogicalType>(count);
+			nested_extra_info_vec[col_idx] = vector<yyjson_val *>(count);
 		}
 
 		idx_t found_key_count;
@@ -1473,6 +1544,7 @@ struct VariantCasts {
 				for (idx_t col_idx = 0; col_idx < column_count; col_idx++) {
 					nested_vals[col_idx][i] = nullptr;
 					nested_info_vec[col_idx][i] = LogicalType::SQLNULL;
+					nested_extra_info_vec[col_idx][i] = nullptr;
 				}
 				continue;
 			}
@@ -1482,6 +1554,7 @@ struct VariantCasts {
 				for (idx_t col_idx = 0; col_idx < column_count; col_idx++) {
 					nested_vals[col_idx][i] = nullptr;
 					nested_info_vec[col_idx][i] = LogicalType::SQLNULL;
+					nested_extra_info_vec[col_idx][i] = nullptr;
 				}
 				if (success && options.strict_cast && obj) {
 					auto e = StringUtil::Format("Expected OBJECT, but got %s: %s", JSONCommon::ValTypeToString(obj),
@@ -1514,11 +1587,16 @@ struct VariantCasts {
 						nested_vals[col_idx][i] = val;
 						nested_info_vec[col_idx][i] =
 						    infos[i] == DDJsonType ? DDJsonType : StructType::GetChildType(infos[i], idx);
+						if (extra_infos[i] && yyjson_is_obj(extra_infos[i])) {
+							nested_extra_info_vec[col_idx][i] = yyjson_obj_getn(extra_infos[i], key_ptr, key_len);
+						} else {
+							nested_extra_info_vec[col_idx][i] = nullptr;
+						}
 						found_keys[col_idx] = true;
 						found_key_count++;
 					}
 				} else if (success && options.error_unknown_key) {
-					auto e = StringUtil::Format("Object %s has unknown key \"" + string(key_ptr, key_len) + "\"",
+					auto e = StringUtil::Format("Object 1 %s has unknown key \"" + string(key_ptr, key_len) + "\"",
 					                            JSONCommon::ValToString(objects[i], 50));
 					HandleCastError::AssignError(e, parameters.error_message);
 					options.object_index = i;
@@ -1535,9 +1613,10 @@ struct VariantCasts {
 					}
 					nested_vals[col_idx][i] = nullptr;
 					nested_info_vec[col_idx][i] = LogicalType::SQLNULL;
+					nested_extra_info_vec[col_idx][i] = nullptr;
 
 					if (success && options.error_missing_key) {
-						auto e = StringUtil::Format("Object %s does not have key \"" + names[col_idx] + "\"",
+						auto e = StringUtil::Format("Object 2 %s does not have key \"" + names[col_idx] + "\"",
 						                            JSONCommon::ValToString(objects[i], 50));
 						HandleCastError::AssignError(e, parameters.error_message);
 						options.object_index = i;
@@ -1549,7 +1628,7 @@ struct VariantCasts {
 
 		for (idx_t col_idx = 0; col_idx < column_count; col_idx++) {
 			if (!VariantCasts::Transform(nested_vals[col_idx], alc, *result_vectors[col_idx], count, options,
-			                             nested_info_vec[col_idx], parameters)) {
+			                             nested_info_vec[col_idx], parameters, nested_extra_info_vec[col_idx])) {
 				success = false;
 			}
 		}
@@ -1558,6 +1637,8 @@ struct VariantCasts {
 	}
 
 	static bool VariantCastAny(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
+		std::cout << "Variat Cast Any ================= " << source.GetType().ToString()
+		          << " and result === " << result.GetType().ToString() << std::endl;
 		auto &lstate = parameters.local_state->Cast<JSONFunctionLocalState>();
 		lstate.json_allocator.Reset();
 		auto alc = lstate.json_allocator.GetYYAlc();
@@ -1577,14 +1658,17 @@ struct VariantCasts {
 		auto docs = JSONCommon::AllocateArray<yyjson_doc *>(alc, count);
 		auto vals = JSONCommon::AllocateArray<yyjson_val *>(alc, count);
 		vector<LogicalType> infos(count);
+		vector<yyjson_val *> extra_infos(count);
 		auto &result_validity = FlatVector::Validity(result);
 		for (idx_t i = 0; i < count; i++) {
 			auto idx = vdata.sel->get_index(i);
 			if (infodata.validity.RowIsValid(idx)) {
 				auto type_info_doc = JSONCommon::ReadDocument(info_data[idx], JSONCommon::READ_FLAG, alc);
 				infos[i] = ConvertLogicalTypeFromJson(yyjson_doc_get_root(type_info_doc));
+				extra_infos[i] = yyjson_doc_get_root(type_info_doc);
 			} else {
 				infos[i] = ConvertLogicalTypeFromString(type_data[idx].GetString());
+				extra_infos[i] = nullptr;
 			}
 			if (!vdata.validity.RowIsValid(idx) || !valuedata.validity.RowIsValid(idx)) {
 				docs[i] = nullptr;
@@ -1598,7 +1682,7 @@ struct VariantCasts {
 		bool constant = (source.GetVectorType() == VectorType::CONSTANT_VECTOR);
 		JSONTransformOptions options(true, true, true, true);
 		options.delay_error = true;
-		success = VariantCasts::Transform(vals, alc, result, count, options, infos, parameters);
+		success = VariantCasts::Transform(vals, alc, result, count, options, infos, parameters, extra_infos);
 
 		if (constant) {
 			result.SetVectorType(VectorType::CONSTANT_VECTOR);
@@ -1643,7 +1727,7 @@ bool TransformToJSON(yyjson_val *vals[], yyjson_alc *alc, Vector &result, const 
 }
 
 static bool TransformInternal(yyjson_val *vals[], Vector &result, const idx_t count, JSONTransformOptions &options,
-                              vector<LogicalType> infos, CastParameters &parameters) {
+                              vector<LogicalType> infos, CastParameters &parameters, vector<yyjson_val *> extra_infos) {
 	auto &validity = FlatVector::Validity(result);
 	auto target = result.GetType();
 
@@ -1651,17 +1735,18 @@ static bool TransformInternal(yyjson_val *vals[], Vector &result, const idx_t co
 	for (idx_t i = 0; i < count; i++) {
 		const auto &val = vals[i];
 		auto res_type = infos[i];
+		auto info = extra_infos[i];
 		Vector res(res_type);
 		VectorWriter writer(res, 0);
 		if (!val || unsafe_yyjson_is_null(val)) {
 			validity.SetInvalid(i);
-		} else if (!VariantReadScalar(writer, val, res_type)) {
+		} else if (!VariantReadScalar(writer, val, res_type, false, info)) {
 			validity.SetInvalid(i);
 			if (success && options.strict_cast) {
 				options.object_index = i;
 				success = false;
 			}
-		} else if (!TryCastVariant(res.GetValue(0), result, i, parameters)) {
+		} else if (!TryCastVariant(res, result, i, parameters, 0)) {
 			validity.SetInvalid(i);
 			if (success && options.strict_cast) {
 				options.object_index = i;
@@ -1673,7 +1758,8 @@ static bool TransformInternal(yyjson_val *vals[], Vector &result, const idx_t co
 }
 
 static bool TransformArray(yyjson_val *arrays[], yyjson_alc *alc, Vector &result, const idx_t count,
-                           JSONTransformOptions &options, vector<LogicalType> infos, CastParameters &parameters) {
+                           JSONTransformOptions &options, vector<LogicalType> infos, CastParameters &parameters,
+                           vector<yyjson_val *> extra_infos) {
 	bool success = true;
 
 	// Initialize list vector
@@ -1710,6 +1796,7 @@ static bool TransformArray(yyjson_val *arrays[], yyjson_alc *alc, Vector &result
 	// Initialize array for the nested values
 	auto nested_vals = JSONCommon::AllocateArray<yyjson_val *>(alc, offset);
 	vector<LogicalType> nested_infos(offset);
+	vector<yyjson_val *> nested_extra_infos(offset);
 
 	// Get array values
 	size_t idx, max;
@@ -1721,7 +1808,13 @@ static bool TransformArray(yyjson_val *arrays[], yyjson_alc *alc, Vector &result
 		}
 		yyjson_arr_foreach(arrays[i], idx, max, val) {
 			nested_vals[list_i] = val;
-			nested_infos[list_i] = ListType::GetChildType(infos[i]);
+			if (extra_infos[i] && yyjson_is_arr(extra_infos[i])) {
+				nested_extra_infos[list_i] = yyjson_arr_get(extra_infos[i], idx);
+				nested_infos[list_i] = ConvertLogicalTypeFromJson(nested_extra_infos[list_i]);
+			} else {
+				nested_extra_infos[list_i] = nullptr;
+				nested_infos[list_i] = ListType::GetChildType(infos[i]);
+			}
 			list_i++;
 		}
 	}
@@ -1729,7 +1822,7 @@ static bool TransformArray(yyjson_val *arrays[], yyjson_alc *alc, Vector &result
 
 	// Transform array values
 	if (!VariantCasts::Transform(nested_vals, alc, ListVector::GetEntry(result), offset, options, nested_infos,
-	                             parameters)) {
+	                             parameters, nested_extra_infos)) {
 		success = false;
 	}
 
@@ -1738,7 +1831,7 @@ static bool TransformArray(yyjson_val *arrays[], yyjson_alc *alc, Vector &result
 
 static bool TransformObjectInternal(yyjson_val *objects[], yyjson_alc *alc, Vector &result, const idx_t count,
                                     JSONTransformOptions &options, vector<LogicalType> infos,
-                                    CastParameters &parameters) {
+                                    CastParameters &parameters, vector<yyjson_val *> extra_infos) {
 	// Set validity first
 	auto &result_validity = FlatVector::Validity(result);
 	for (idx_t i = 0; i < count; i++) {
@@ -1759,7 +1852,8 @@ static bool TransformObjectInternal(yyjson_val *objects[], yyjson_alc *alc, Vect
 		child_vectors.push_back(child_vs[child_i].get());
 	}
 
-	return VariantCasts::TransformObject(objects, alc, count, child_names, child_vectors, options, infos, parameters);
+	return VariantCasts::TransformObject(objects, alc, count, child_names, child_vectors, options, infos, parameters,
+	                                     extra_infos);
 }
 
 template <class Reader>
@@ -1978,6 +2072,44 @@ static bool VariantStructExtractImpl(VectorWriter &result, const VectorReader &a
 	return false;
 }
 
+static bool VariantToJsonImpl(VectorWriter &result, const VectorReader &arg) {
+	JSONAllocator alc {Allocator::DefaultAllocator()};
+	auto arg_doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+	auto arg_root = yyjson_doc_get_root(arg_doc);
+
+	auto doc = JSONCommon::CreateDocument(alc.GetYYAlc());
+	yyjson_mut_val *root = yyjson_val_mut_copy(doc, arg_root);
+	if (yyjson_mut_is_null(root)) {
+		return false;
+	}
+	yyjson_mut_doc_set_root(doc, root);
+	size_t len;
+	char *data = yyjson_mut_write_opts(doc, 0, alc.GetYYAlc(), &len, nullptr);
+	result.SetString(string_t(data, len));
+	return true;
+}
+
+static bool VariantArrayToJsonImpl(VectorWriter &result, const VectorReader &arg) {
+	JSONAllocator alc {Allocator::DefaultAllocator()};
+	auto doc = JSONCommon::CreateDocument(alc.GetYYAlc());
+	yyjson_mut_val *root = yyjson_mut_arr(doc);
+	idx_t i = 0;
+	for (const VectorReader &item : arg) {
+		if (item.IsNull()) {
+			yyjson_mut_arr_add_null(doc, root);
+		} else {
+			auto arg_doc = JSONCommon::ReadDocument(item[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+			auto arg_root = yyjson_doc_get_root(arg_doc);
+			yyjson_mut_arr_append(root, yyjson_val_mut_copy(doc, arg_root));
+		}
+	}
+	yyjson_mut_doc_set_root(doc, root);
+	size_t len;
+	char *data = yyjson_mut_write_opts(doc, 0, alc.GetYYAlc(), &len, nullptr);
+	result.SetString(string_t(data, len));
+	return true;
+}
+
 static bool VariantListSliceImpl(VectorWriter &result, const VectorReader &arg, const VectorReader &begin,
                                  const VectorReader &end) {
 	if (arg.IsNull()) {
@@ -2065,6 +2197,15 @@ static void VariantListExtractFunc(DataChunk &args, ExpressionState &state, Vect
 static void VariantStructExtractFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.data[0].GetType() == DDVariantType);
 	VectorExecute(args, result, VariantStructExtractImpl);
+}
+
+static void VariantToJsonFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.data[0].GetType() == DDVariantType || args.data[0].GetType() == DDVariantArrayType);
+	if (args.data[0].GetType() == DDVariantType) {
+		VectorExecute(args, result, VariantToJsonImpl);
+	} else {
+		VectorExecute(args, result, VariantArrayToJsonImpl);
+	}
 }
 
 static void TransformVariantArrayFunc(Vector &source, Vector &result, idx_t count) {
@@ -2638,6 +2779,7 @@ void DatadocsExtension::LoadVariant(Connection &con) {
 	casts.RegisterCastFunction(struct_type, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
 
 	auto any_to_variant_array_cost = casts.ImplicitCastCost(LogicalType::ANY, DDVariantArrayType);
+	casts.RegisterCastFunction(DDVariantArrayType, DDVariantArrayType, AnyToVariantArrayCastBind, 0);
 	casts.RegisterCastFunction(LogicalType::ANY, DDVariantArrayType, AnyToVariantArrayCastBind,
 	                           any_to_variant_array_cost);
 	casts.RegisterCastFunction(LogicalType::VARCHAR, DDVariantArrayType, AnyToVariantArrayCastBind,
@@ -2731,6 +2873,14 @@ void DatadocsExtension::LoadVariant(Connection &con) {
 	variant_struct_extract_set.AddFunction(vstructextractfun);
 	CreateScalarFunctionInfo variant_struct_extract_info(std::move(variant_struct_extract_set));
 	catalog.AddFunction(context, variant_struct_extract_info);
+
+	auto vtojsonfunc = ScalarFunction({DDVariantType}, DDJsonType, VariantToJsonFunc);
+	auto varraytojsonfunc = ScalarFunction({DDVariantArrayType}, DDJsonType, VariantToJsonFunc);
+	ScalarFunctionSet variant_to_json_set("to_json");
+	variant_to_json_set.AddFunction(vtojsonfunc);
+	variant_to_json_set.AddFunction(varraytojsonfunc);
+	CreateScalarFunctionInfo variant_to_json_info(std::move(variant_to_json_set));
+	catalog.AddFunction(context, variant_to_json_info);
 }
 
 } // namespace duckdb
