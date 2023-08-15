@@ -80,6 +80,7 @@ set(DATADOCS_EXTENSION_FILES
 	column.cpp
 	converters.cpp
 	variant.cpp
+  parse_num.cpp
 	xls/src/endian.c
 	xls/src/ole.c
 	xls/src/xls.c
