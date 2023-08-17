@@ -16,7 +16,7 @@ XMLHandlerBase::~XMLHandlerBase()
 bool XMLHandlerBase::parse_string(string_t input)
 {
 	create_parser();
-	bool res = XML_Parse(m_parser, input.GetDataUnsafe(), input.GetSize(), 0) == XML_STATUS_OK;
+	bool res = XML_Parse(m_parser, input.GetData(), input.GetSize(), 0) == XML_STATUS_OK;
 	XML_ParserFree(m_parser); m_parser = nullptr;
 	return res;
 }
@@ -56,7 +56,7 @@ void XMLHandlerBase::abort()
 }
 
 static void XMLBuildColumns(const std::vector<IngestColumnDefinition> &fields, std::unordered_map<string, size_t> &keys,
-    vector<std::unique_ptr<XMLValueBase>> &columns, idx_t &cur_row);
+    std::vector<std::unique_ptr<XMLValueBase>> &columns, idx_t &cur_row);
 
 class XMLValue : public XMLValueBase
 {
@@ -105,11 +105,9 @@ public:
 	virtual bool second_tag() override { return true; }
 	virtual bool new_text(std::string&& s) override
 	{
-		if (buffer->GetSize() + 1 > buffer->GetCapacity()) {
-			buffer->Reserve(buffer->GetCapacity() * 2);
-		}
 		cur_row = buffer->GetSize();
-		buffer->SetSize(buffer->GetSize() + 1);
+		buffer->Reserve(cur_row + 1);
+		buffer->SetSize(cur_row + 1);
 		++(*length);
 
 		if (s.empty() || !column->Write(s)) {
@@ -202,7 +200,7 @@ public:
 protected:
 	XMLStruct(idx_t &cur_row) : XMLValueBase(this), IngestColBase("__root__", cur_row) {}
 
-	vector<std::unique_ptr<XMLValueBase>> m_columns;
+	std::vector<std::unique_ptr<XMLValueBase>> m_columns;
 	IngestColChildrenMap m_children;
 };
 
@@ -230,12 +228,10 @@ public:
 		length = &entry.length;
 		second_tag();
 	}
-	virtual bool second_tag() override {
-		if (buffer->GetSize() + 1 > buffer->GetCapacity()) {
-			buffer->Reserve(buffer->GetCapacity() * 2);
-		}
+	virtual bool second_tag() override { 
 		cur_row = buffer->GetSize();
-		buffer->SetSize(buffer->GetSize() + 1);
+		buffer->Reserve(cur_row + 1);
+		buffer->SetSize(cur_row + 1);
 		++(*length);
 		column.first_tag();
 		return true;
@@ -268,7 +264,7 @@ public:
 		XMLBuildColumns(schema.columns, m_children.keys, m_columns, cur_row);
 	}
 
-	void BindSchema(vector<LogicalType> &return_types, vector<string> &names) {
+	void BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) {
 		for (auto &col : m_columns) {
 			names.push_back(col->column.GetName());
 			return_types.push_back(col->column.GetType());
@@ -385,7 +381,7 @@ XMLValueBase *XMLBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row) 
 }
 
 static void XMLBuildColumns(const std::vector<IngestColumnDefinition> &fields, std::unordered_map<string, size_t> &keys,
-    vector<std::unique_ptr<XMLValueBase>> &columns, idx_t &cur_row) {
+    std::vector<std::unique_ptr<XMLValueBase>> &columns, idx_t &cur_row) {
 	for (const auto &col : fields) {
 		if (col.index < 0) {
 			continue;
@@ -427,7 +423,7 @@ void XMLParser::BuildColumns() {
 	((XMLTopListStruct*)root.m_root.get())->m_struct.BuildColumns(m_schema);
 }
 
-void XMLParser::BindSchema(vector<LogicalType> &return_types, vector<string> &names) {
+void XMLParser::BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) {
 	((XMLTopListStruct*)root.m_root.get())->m_struct.BindSchema(return_types, names);
 }
 

@@ -16,8 +16,6 @@
 #include <iomanip>
 #include <regex>
 
-#define BOOST_NO_CXX98_FUNCTION_BASE
-
 #include <boost/iterator/indirect_iterator.hpp>
 #include <boost/unordered_map.hpp>
 
@@ -53,14 +51,14 @@ namespace std
 namespace duckdb {
 
 const ErrorType ErrorType::NoErrorValue = {};
-
+	
 /* ========= merge with xls_common from master ========= */
 static const double pow_10[] =
 {
 	1e+0,
 	1e+1,  1e+2,  1e+3,  1e+4,  1e+5,  1e+6,  1e+7,  1e+8,  1e+9,  1e+10, 1e+11, 1e+12, 1e+13, 1e+14, 1e+15, 1e+16, 1e+17, 1e+18, 1e+19, 1e+20,
 	1e+21, 1e+22
-};
+}; 
 
 double fast_strtod(const char* str, char **endptr)
 {
@@ -144,9 +142,9 @@ static bool cell_null_str(const CellRaw& cell)
 	return s && (s->empty() || *s == "NULL" || *s == "null");
 }
 
-Parser* Parser::get_parser(const std::string& filename)
+Parser* Parser::get_parser(const std::string& filename, ClientContext &context)
 {
-	return ParserImpl::get_parser_from_reader(std::make_shared<FileReader>(filename));
+	return ParserImpl::get_parser_from_reader(std::make_shared<FileReader>(filename, context));
 }
 
 template <class Parser>
@@ -340,11 +338,9 @@ public:
 				--end_pos;
 			string value = s.substr(pos, end_pos - pos);
 
-			if (buffer->GetSize() + 1 > buffer->GetCapacity()) {
-				buffer->Reserve(buffer->GetCapacity() * 2);
-			}
 			list_row = buffer->GetSize();
-			buffer->SetSize(buffer->GetSize() + 1);
+			buffer->Reserve(list_row + 1);
+			buffer->SetSize(list_row + 1);
 			++entry.length;
 
 			if (value.empty() || !child->Write(value)) {
@@ -380,7 +376,7 @@ public:
 	};
 
 	bool Write(string_t v) override {
-		const char* begin = v.GetDataUnsafe();
+		const char* begin = v.GetData();
 		const char* end = begin + v.GetSize();
 		if (*begin == '<')
 		{
@@ -388,7 +384,7 @@ public:
 				return false;
 			while (std::isspace(*++begin));
 		}
-		vector<string> values;
+		std::vector<string> values;
 		while (begin < end)
 		{
 			if (!wkt_to_bytes(begin, end, values.emplace_back()))
@@ -484,7 +480,7 @@ void ParserImpl::BuildColumns() {
 	}
 }
 
-void ParserImpl::BindSchema(vector<LogicalType> &return_types, vector<string> &names) {
+void ParserImpl::BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) {
 	for (auto &col : m_columns) {
 		names.push_back(col->GetName());
 		return_types.push_back(col->GetType());

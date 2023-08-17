@@ -2,6 +2,7 @@
 #define READ_XLSX_H
 
 #include <memory>
+#include <file_reader.h>
 
 #include "xlscommon.h"
 
@@ -40,7 +41,7 @@ public:
 	WorkBookX(WorkBookX&& other);
 	WorkBookX& operator = (WorkBookX&& other);
 	~WorkBookX();
-	bool open(const std::string& filename);
+	bool open(duckdb::BaseReader *reader);
 	bool open(MemBuffer* buffer);
 	void close();
 	explicit operator bool();

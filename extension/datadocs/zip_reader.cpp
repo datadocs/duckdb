@@ -168,7 +168,7 @@ bool ZIPParser::do_open_zip()
 		return true;
 	m_files.clear();
 	if (m_reader->is_file())
-		m_zip = unzOpen(m_reader->filename().data());
+		m_zip = xls::unzOpenFS(m_reader.get());
 	else
 		m_zip = xls::unzOpenMemory(m_reader->read_all());
 	if (!m_zip)

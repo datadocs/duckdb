@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <string>
 
+#include "duckdb.hpp"
+
 #include "xls/xlscommon.h"
 
 namespace duckdb {
@@ -48,7 +50,7 @@ protected:
 class FileReader : public BaseReader
 {
 public:
-	FileReader(const std::string& filename);
+	FileReader(const std::string& filename, ClientContext &context);
 	virtual bool is_file() override { return true; }
 
 protected:
@@ -56,7 +58,9 @@ protected:
 	virtual void do_close() override;
 	virtual int do_read(char* buffer, size_t size) override;
 
-	std::FILE* m_fp;
+	FileSystem &fs;
+public:
+	unique_ptr<FileHandle> file_handle;
 };
 
 }

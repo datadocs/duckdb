@@ -117,7 +117,7 @@ bool XLParser<TWorkBook>::do_open_wb()
 	if (m_wb)
 		return true;
 	if (m_reader->is_file())
-		return m_wb.open(m_reader->filename());
+		return m_wb.open(m_reader.get());
 	else
 		return m_wb.open(m_reader->read_all());
 }

@@ -32,7 +32,7 @@ public:
 	virtual bool open() override;
 	virtual void close() override;
 	virtual void BuildColumns() override;
-	virtual void BindSchema(vector<LogicalType> &return_types, vector<string> &names) override;
+	virtual void BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) override;
 	virtual idx_t FillChunk(DataChunk &output) override;
 	virtual int get_percent_complete() override;
 	virtual size_t get_sheet_count() override;
@@ -53,7 +53,7 @@ protected:
 	void build_column_info(std::vector<Column>& columns);
 	void infer_table(const std::string* comment);
 
-	vector<std::unique_ptr<IngestColBase>> m_columns;
+	std::vector<std::unique_ptr<IngestColBase>> m_columns;
 	idx_t cur_row;
 	JSONDispatcher json_dispatcher;
 	XMLParseHandler xml_handler;

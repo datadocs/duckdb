@@ -639,9 +639,9 @@ WorkBookX::WorkBookX(WorkBookX&&) = default;
 WorkBookX& WorkBookX::operator = (WorkBookX&&) = default;
 WorkBookX::~WorkBookX() = default;
 
-bool WorkBookX::open(const std::string & filename)
+bool WorkBookX::open(duckdb::BaseReader *reader)
 {
-	unzFile zip = unzOpen(filename.data());
+	unzFile zip = unzOpenFS(reader);
 	if (!zip)
 		return false;
 	d = std::make_unique<Impl>(zip);

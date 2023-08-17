@@ -203,7 +203,7 @@ bool IngestColBLOBBase64::Write(string_t v) {
 		Writer().SetString(v);
 		return true;
 	}
-	const unsigned char *s = (const unsigned char*)v.GetDataUnsafe();
+	const unsigned char *s = (const unsigned char*)v.GetData();
 	while (s[size - 1] == '=')
 		--size;
 	size_t len_tail = size % 4;
@@ -240,7 +240,7 @@ bool IngestColBLOBHex::Write(string_t v) {
 	}
 	if (size % 2 != 0)
 		return false;
-	const char *s = v.GetDataUnsafe();
+	const char *s = v.GetData();
 	size_t i_read = (s[1] == 'x' || s[1] == 'X') && s[0] == '0' ? 2 : 0;
 	char *res = Writer().ReserveString((size - i_read) / 2).GetDataWriteable();
 	if (!string0x_to_bytes(s+i_read, s+size, res))
@@ -306,7 +306,7 @@ bool IngestColNUMERIC::Write(double v) {
 
 bool IngestColGEO::Write(string_t v) {
 	string res;
-	const char* begin = v.GetDataUnsafe();
+	const char* begin = v.GetData();
 	const char* end = begin + v.GetSize();
 	if (!(wkt_to_bytes(begin, end, res) && begin == end)) {
 		return false;

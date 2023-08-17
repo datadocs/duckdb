@@ -1,7 +1,7 @@
+#include "converters.hpp"
+#include "datadocs.hpp"
+#include "datadocs_extension.hpp"
 #include "duckdb.hpp"
-
-#include <charconv>
-#ifndef DUCKDB_AMALGAMATION
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/decimal.hpp"
@@ -12,12 +12,8 @@
 #include "duckdb/function/cast/cast_function_set.hpp"
 #include "duckdb/function/scalar/nested_functions.hpp"
 #include "duckdb/function/scalar/string_functions.hpp"
+#include "duckdb/main/extension_util.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
-#include "duckdb/parser/parsed_data/create_type_info.hpp"
-#endif
-#include "converters.hpp"
-#include "datadocs.hpp"
-#include "datadocs_extension.hpp"
 #include "fmt/format.h"
 #include "geometry.hpp"
 #include "json_common.hpp"
@@ -25,6 +21,8 @@
 #include "json_transform.hpp"
 #include "postgis/lwgeom_ogc.hpp"
 #include "vector_proxy.hpp"
+
+#include <charconv>
 
 namespace duckdb {
 
@@ -670,7 +668,7 @@ private:
 	yyjson_mut_val *WriteEnumImpl(idx_t val) {
 		const Vector &enum_dictionary = EnumType::GetValuesInsertOrder(*type);
 		const string_t &s = FlatVector::GetData<string_t>(enum_dictionary)[val];
-		return yyjson_mut_strncpy(doc, s.GetDataUnsafe(), s.GetSize());
+		return yyjson_mut_strncpy(doc, s.GetData(), s.GetSize());
 	}
 
 	yyjson_mut_val *WriteDate(const VectorReader &arg) {
@@ -1637,8 +1635,6 @@ struct VariantCasts {
 	}
 
 	static bool VariantCastAny(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
-		std::cout << "Variat Cast Any ================= " << source.GetType().ToString()
-		          << " and result === " << result.GetType().ToString() << std::endl;
 		auto &lstate = parameters.local_state->Cast<JSONFunctionLocalState>();
 		lstate.json_allocator.Reset();
 		auto alc = lstate.json_allocator.GetYYAlc();
@@ -2004,7 +2000,7 @@ static bool VariantListExtractImpl(VectorWriter &result, const VectorReader &arg
 		Vector res(LogicalType::VARCHAR);
 		auto str = SubstringFun::SubstringUnicode(res, string_t(unsafe_yyjson_get_str(arg_root)), idx, 1);
 		auto doc = JSONCommon::CreateDocument(alc.GetYYAlc());
-		auto root = yyjson_mut_strn(doc, str.GetDataUnsafe(), (size_t)str.GetSize());
+		auto root = yyjson_mut_strn(doc, str.GetData(), (size_t)str.GetSize());
 		if (yyjson_mut_is_null(root)) {
 			return false;
 		}
@@ -2137,7 +2133,7 @@ static bool VariantListSliceImpl(VectorWriter &result, const VectorReader &arg, 
 		Vector res(LogicalType::VARCHAR);
 		auto str = SubstringFun::SubstringUnicode(res, string_t(unsafe_yyjson_get_str(arg_root)), begin_idx + 1,
 		                                          end_idx - begin_idx);
-		auto root = yyjson_mut_strn(doc, str.GetDataUnsafe(), (size_t)str.GetSize());
+		auto root = yyjson_mut_strn(doc, str.GetData(), (size_t)str.GetSize());
 		if (yyjson_mut_is_null(root)) {
 			return false;
 		}
@@ -2730,13 +2726,11 @@ static void VariantFromSortHash(DataChunk &args, ExpressionState &state, Vector 
 } // namespace
 
 #define REGISTER_FUNCTION(TYPE, SQL_NAME, C_NAME)                                                                      \
-	CreateScalarFunctionInfo from_variant_##SQL_NAME##_info(                                                           \
-	    ScalarFunction("from_variant_" #SQL_NAME, {DDVariantType}, TYPE, FromVariantFunc<VariantReader##C_NAME>));     \
-	catalog.CreateFunction(context, from_variant_##SQL_NAME##_info);                                                   \
-	CreateScalarFunctionInfo from_variant_##SQL_NAME##_array_info(                                                     \
-	    ScalarFunction("from_variant_" #SQL_NAME "_array", {DDVariantType}, LogicalType::LIST(TYPE),                   \
-	                   FromVariantListFunc<VariantReader##C_NAME>));                                                   \
-	catalog.CreateFunction(context, from_variant_##SQL_NAME##_array_info);
+	ExtensionUtil::RegisterFunction(inst, ScalarFunction("from_variant_" #SQL_NAME, {DDVariantType}, TYPE,             \
+	                                                     FromVariantFunc<VariantReader##C_NAME>));                     \
+	ExtensionUtil::RegisterFunction(inst, ScalarFunction("from_variant_" #SQL_NAME "_array", {DDVariantType},          \
+	                                                     LogicalType::LIST(TYPE),                                      \
+	                                                     FromVariantListFunc<VariantReader##C_NAME>));
 
 BoundCastInfo VariantToAnyCastBind(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
 	return BoundCastInfo(VariantCasts::VariantCastAny, nullptr, JSONFunctionLocalState::InitCastLocalState);
@@ -2750,19 +2744,53 @@ BoundCastInfo AnyToVariantArrayCastBind(BindCastInput &input, const LogicalType 
 	return BoundCastInfo(VariantCasts::AnyCastToVariantArray);
 }
 
-void DatadocsExtension::LoadVariant(Connection &con) {
-	auto &context = *con.context;
-	auto &catalog = Catalog::GetSystemCatalog(context);
+static const std::vector<ScalarFunctionSet> GetVariantScalarFunctions() {
+	std::vector<ScalarFunctionSet> func_set {};
 
+	auto vextractfun = ScalarFunction({DDVariantType, LogicalType::BIGINT}, DDVariantType, VariantListExtractFunc);
+	auto vstructextractfun =
+	    ScalarFunction({DDVariantType, LogicalType::VARCHAR}, DDVariantType, VariantStructExtractFunc);
+	ScalarFunctionSet variant_extract_set("array_extract");
+	variant_extract_set.AddFunction(vextractfun);
+	variant_extract_set.AddFunction(vstructextractfun);
+	func_set.push_back(variant_extract_set);
+
+	ScalarFunctionSet variant_list_extract_set("list_extract");
+	variant_list_extract_set.AddFunction(vextractfun);
+	func_set.push_back(variant_list_extract_set);
+
+	ScalarFunctionSet variant_list_element_set("list_element");
+	variant_list_element_set.AddFunction(vextractfun);
+	func_set.push_back(variant_list_element_set);
+
+	auto vslicefun = ScalarFunction({DDVariantType, LogicalType::BIGINT, LogicalType::BIGINT}, DDVariantType,
+	                                VariantListSliceFunc, VariantListSliceBind);
+	// vslicefun.varargs = LogicalType::ANY;
+	vslicefun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	ScalarFunctionSet variant_array_slice_set("array_slice");
+	variant_array_slice_set.AddFunction(vslicefun);
+	func_set.push_back(variant_array_slice_set);
+
+	ScalarFunctionSet variant_struct_extract_set("struct_extract");
+	variant_struct_extract_set.AddFunction(vstructextractfun);
+	func_set.push_back(variant_struct_extract_set);
+
+	auto vtojsonfunc = ScalarFunction({DDVariantType}, DDJsonType, VariantToJsonFunc);
+	auto varraytojsonfunc = ScalarFunction({DDVariantArrayType}, DDJsonType, VariantToJsonFunc);
+	ScalarFunctionSet variant_to_json_set("to_json");
+	variant_to_json_set.AddFunction(vtojsonfunc);
+	variant_to_json_set.AddFunction(varraytojsonfunc);
+	func_set.push_back(variant_to_json_set);
+
+	return func_set;
+}
+
+void DatadocsExtension::LoadVariant(DatabaseInstance &inst) {
 	// add the "variant" type
-	CreateTypeInfo variant_type_info("VARIANT", DDVariantType);
-	variant_type_info.temporary = true;
-	variant_type_info.internal = true;
-	catalog.CreateType(*con.context, variant_type_info);
+	ExtensionUtil::RegisterType(inst, VARIANT_TYPE_NAME, DDVariantType);
 
 	// add variant casts
-	auto &config = DBConfig::GetConfig(*con.context);
-	auto &casts = config.GetCastFunctions();
+	auto &casts = DBConfig::GetConfig(inst).GetCastFunctions();
 	auto variant_to_any_cost = casts.ImplicitCastCost(DDVariantType, LogicalType::ANY);
 	const auto struct_type = LogicalType::STRUCT({{"any", LogicalType::ANY}});
 	const auto list_type = LogicalType::LIST(LogicalType::ANY);
@@ -2789,27 +2817,23 @@ void DatadocsExtension::LoadVariant(Connection &con) {
 	casts.RegisterCastFunction(struct_type, DDVariantArrayType, AnyToVariantArrayCastBind, any_to_variant_array_cost);
 	casts.RegisterCastFunction(DDVariantType, DDVariantArrayType, AnyToVariantArrayCastBind, any_to_variant_array_cost);
 
-	CreateScalarFunctionInfo variant_info(
-	    ScalarFunction("variant", {LogicalType::ANY}, DDVariantType, VariantFunction));
-	catalog.CreateFunction(context, variant_info);
+	ExtensionUtil::RegisterFunction(inst,
+	                                ScalarFunction("variant", {LogicalType::ANY}, DDVariantType, VariantFunction));
 
 	// Function variant_array
-	CreateScalarFunctionInfo variant_array_info(
-	    ScalarFunction("variant_array", {LogicalType::ANY}, DDVariantArrayType, VariantArrayFunc));
-	catalog.CreateFunction(context, variant_array_info);
+	ExtensionUtil::RegisterFunction(
+	    inst, ScalarFunction("variant_array", {LogicalType::ANY}, DDVariantArrayType, VariantArrayFunc));
 
 	// Function is_variant and is_variant_array
 	auto is_variant_func =
 	    ScalarFunction("is_variant", {LogicalType::ANY}, LogicalType::BOOLEAN, IsVariantFunc<DDVariantType>);
 	is_variant_func.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
-	CreateScalarFunctionInfo is_variant_info(is_variant_func);
-	catalog.CreateFunction(context, is_variant_info);
+	ExtensionUtil::RegisterFunction(inst, is_variant_func);
 
 	auto is_variant_array_func =
 	    ScalarFunction("is_variant_array", {LogicalType::ANY}, LogicalType::BOOLEAN, IsVariantFunc<DDVariantArrayType>);
 	is_variant_array_func.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
-	CreateScalarFunctionInfo is_variant_array_info(is_variant_array_func);
-	catalog.CreateFunction(context, is_variant_array_info);
+	ExtensionUtil::RegisterFunction(inst, is_variant_array_func);
 
 	REGISTER_FUNCTION(LogicalType::BOOLEAN, bool, Bool)
 	REGISTER_FUNCTION(LogicalType::BIGINT, int64, Int64)
@@ -2830,57 +2854,27 @@ void DatadocsExtension::LoadVariant(Connection &con) {
 	    ScalarFunction({DDVariantType, LogicalType::BIGINT}, DDVariantType, VariantAccessIndexFunc));
 	variant_access_set.AddFunction(
 	    ScalarFunction({DDVariantType, LogicalType::VARCHAR}, DDVariantType, VariantAccessKeyFunc));
-	CreateScalarFunctionInfo variant_access_info(std::move(variant_access_set));
-	catalog.CreateFunction(context, variant_access_info);
+	ExtensionUtil::RegisterFunction(inst, variant_access_set);
 
-	CreateScalarFunctionInfo sort_hash_info(ScalarFunction("variant_sort_hash", {DDVariantType, LogicalType::BOOLEAN},
-	                                                       LogicalType::VARCHAR, VariantSortHash));
-	catalog.CreateFunction(context, sort_hash_info);
+	ExtensionUtil::RegisterFunction(inst, ScalarFunction("variant_sort_hash", {DDVariantType, LogicalType::BOOLEAN},
+	                                                     LogicalType::VARCHAR, VariantSortHash));
 
-	CreateScalarFunctionInfo from_sort_hash_info(
-	    ScalarFunction("variant_from_sort_hash", {LogicalType::VARCHAR}, DDVariantType, VariantFromSortHash));
-	catalog.CreateFunction(context, from_sort_hash_info);
+	ExtensionUtil::RegisterFunction(
+	    inst, ScalarFunction("variant_from_sort_hash", {LogicalType::VARCHAR}, DDVariantType, VariantFromSortHash));
 
-	auto vextractfun = ScalarFunction({DDVariantType, LogicalType::BIGINT}, DDVariantType, VariantListExtractFunc);
-	auto vstructextractfun =
-	    ScalarFunction({DDVariantType, LogicalType::VARCHAR}, DDVariantType, VariantStructExtractFunc);
-	ScalarFunctionSet variant_extract_set("array_extract");
-	variant_extract_set.AddFunction(vextractfun);
-	variant_extract_set.AddFunction(vstructextractfun);
-	CreateScalarFunctionInfo variant_extract_info(std::move(variant_extract_set));
-	catalog.AddFunction(context, variant_extract_info);
+	Connection con(inst);
+	con.BeginTransaction();
+	auto &context = *con.context;
+	auto &system_catalog = Catalog::GetSystemCatalog(context);
+	auto func_set = GetVariantScalarFunctions();
+	for (auto &set : func_set) {
+		D_ASSERT(!set.name.empty());
+		CreateScalarFunctionInfo info(std::move(set));
+		info.on_conflict = OnCreateConflict::ALTER_ON_CONFLICT;
+		system_catalog.CreateFunction(context, info);
+	}
 
-	ScalarFunctionSet variant_list_extract_set("list_extract");
-	variant_list_extract_set.AddFunction(vextractfun);
-	CreateScalarFunctionInfo variant_list_extract_info(std::move(variant_list_extract_set));
-	catalog.AddFunction(context, variant_list_extract_info);
-
-	ScalarFunctionSet variant_list_element_set("list_element");
-	variant_list_element_set.AddFunction(vextractfun);
-	CreateScalarFunctionInfo variant_list_element_info(std::move(variant_list_element_set));
-	catalog.AddFunction(context, variant_list_element_info);
-
-	auto vslicefun = ScalarFunction({DDVariantType, LogicalType::BIGINT, LogicalType::BIGINT}, DDVariantType,
-	                                VariantListSliceFunc, VariantListSliceBind);
-	// vslicefun.varargs = LogicalType::ANY;
-	vslicefun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
-	ScalarFunctionSet variant_array_slice_set("array_slice");
-	variant_array_slice_set.AddFunction(vslicefun);
-	CreateScalarFunctionInfo variant_array_slice_info(std::move(variant_array_slice_set));
-	catalog.AddFunction(context, variant_array_slice_info);
-
-	ScalarFunctionSet variant_struct_extract_set("struct_extract");
-	variant_struct_extract_set.AddFunction(vstructextractfun);
-	CreateScalarFunctionInfo variant_struct_extract_info(std::move(variant_struct_extract_set));
-	catalog.AddFunction(context, variant_struct_extract_info);
-
-	auto vtojsonfunc = ScalarFunction({DDVariantType}, DDJsonType, VariantToJsonFunc);
-	auto varraytojsonfunc = ScalarFunction({DDVariantArrayType}, DDJsonType, VariantToJsonFunc);
-	ScalarFunctionSet variant_to_json_set("to_json");
-	variant_to_json_set.AddFunction(vtojsonfunc);
-	variant_to_json_set.AddFunction(varraytojsonfunc);
-	CreateScalarFunctionInfo variant_to_json_info(std::move(variant_to_json_set));
-	catalog.AddFunction(context, variant_to_json_info);
+	con.Commit();
 }
 
 } // namespace duckdb
