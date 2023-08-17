@@ -16,6 +16,8 @@
 #include <iomanip>
 #include <regex>
 
+#define BOOST_NO_CXX98_FUNCTION_BASE
+
 #include <boost/iterator/indirect_iterator.hpp>
 #include <boost/unordered_map.hpp>
 
