@@ -133,34 +133,34 @@ int BaseReader::pos_percent()
 	return (int)((double)tell() * 100 / m_content.size);
 }
 
-FileReader::FileReader(const std::string& filename) :
+FileReader::FileReader(const std::string& filename, ClientContext &context) :
 	BaseReader(filename),
-	m_fp(nullptr)
+	fs(FileSystem::GetFileSystem(context))
 {}
 
 bool FileReader::do_open()
 {
-	m_fp = std::fopen(m_filename.data(), "rb");
-	if (!m_fp)
-		return false;
-	std::fseek(m_fp, 0, SEEK_END);
-	m_content.size = (size_t)std::ftell(m_fp);
-	std::fseek(m_fp, 0, SEEK_SET);
+	file_handle = fs.OpenFile(m_filename.data(), FileFlags::FILE_FLAGS_READ);
+	idx_t size = file_handle->GetFileSize();
+	m_content.size = size < 0 ? 0 : size;
+	if (file_handle->CanSeek()) {
+		file_handle->Reset();
+	}
 	return true;
 }
 
 void FileReader::do_close()
 {
-	if (m_fp)
+	if (file_handle)
 	{
-		std::fclose(m_fp);
-		m_fp = nullptr;
+		file_handle->Close();
+		file_handle.reset();
 	}
 }
 
 int FileReader::do_read(char* buffer, size_t size)
 {
-	return (int)std::fread(buffer, 1, size, m_fp);
+	return file_handle->Read(buffer, size);
 }
 
 }

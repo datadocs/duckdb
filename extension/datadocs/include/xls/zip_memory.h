@@ -3,11 +3,13 @@
 
 #include <contrib/minizip/unzip.h>
 
+#include "file_reader.h"
 #include "xlscommon.h"
 
 namespace xls {
 
 unzFile unzOpenMemory(MemBuffer* buffer);
+unzFile unzOpenFS(duckdb::BaseReader *reader);
 
 }
 

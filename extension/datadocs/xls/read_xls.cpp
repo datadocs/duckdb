@@ -207,10 +207,12 @@ WorkBook::WorkBook(WorkBook&&) = default;
 WorkBook& WorkBook::operator = (WorkBook&&) = default;
 WorkBook::~WorkBook() = default;
 
-bool WorkBook::open(const std::string& filename)
+bool WorkBook::open(duckdb::BaseReader *reader)
 {
 	d.reset();
-	d = Impl::create(libxls::ole2_open_file(filename.data()));
+	reader->open();
+	MemBuffer* buffer = reader->read_all();
+	d = Impl::create(libxls::ole2_open_buffer(buffer->buffer, buffer->size));
 	return static_cast<bool>(d);
 }
 

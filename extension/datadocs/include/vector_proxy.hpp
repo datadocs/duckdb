@@ -31,7 +31,7 @@ public:
 
 private:
 	UnifiedVectorFormat data;
-	vector<VectorHolder> child_data;
+	std::vector<VectorHolder> child_data;
 };
 
 class VectorReader {
@@ -130,13 +130,13 @@ private:
 
 class VectorStructWriter {
 public:
-	VectorStructWriter(vector<unique_ptr<Vector>> &children, idx_t i_row) noexcept : children(children), i_row(i_row) {
+	VectorStructWriter(std::vector<unique_ptr<Vector>> &children, idx_t i_row) noexcept : children(children), i_row(i_row) {
 	}
 
 	VectorWriter operator[](size_t index) noexcept;
 
 private:
-	vector<unique_ptr<Vector>> &children;
+	std::vector<unique_ptr<Vector>> &children;
 	idx_t i_row;
 };
 

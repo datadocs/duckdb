@@ -32,7 +32,7 @@ bool VectorReader::IsNull() const noexcept {
 
 std::string_view VectorReader::GetString() const noexcept {
 	const string_t &s = Get<string_t>();
-	return {s.GetDataUnsafe(), (size_t)s.GetSize()};
+	return {s.GetData(), (size_t)s.GetSize()};
 }
 
 VectorReader VectorReader::operator[](size_t index) const noexcept {
@@ -105,12 +105,10 @@ VectorListWriter::~VectorListWriter() {
 }
 
 VectorWriter VectorListWriter::Append() {
-	if (buffer.GetSize() + 1 > buffer.GetCapacity()) {
-		buffer.Reserve(buffer.GetCapacity() * 2);
-	}
-	auto oldSize = buffer.GetSize();
-	buffer.SetSize(oldSize + 1);
-	return {buffer.GetChild(), oldSize};
+	idx_t size = buffer.GetSize();
+	buffer.Reserve(size + 1);
+	buffer.SetSize(size + 1);
+	return {buffer.GetChild(), size};
 }
 
 VectorWriter VectorStructWriter::operator[](size_t index) noexcept {

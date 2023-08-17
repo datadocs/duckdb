@@ -65,7 +65,7 @@ public:
 	virtual ~JSONTopListStruct() = default;
 
 	void BuildColumns(JSONSchema &schema);
-	void BindSchema(vector<LogicalType> &return_types, vector<string> &names);
+	void BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names);
 	void NewChunk(DataChunk &output);
 
 	virtual bool Null() { ++m_row_number; return true; }
@@ -117,7 +117,7 @@ public:
 
 private:
 	int64_t m_row_number;
-	vector<std::unique_ptr<JSONValue>> m_columns;
+	std::vector<std::unique_ptr<JSONValue>> m_columns;
 	IngestColChildrenMap m_children;
 	IngestColBIGINT col_row_number;
 };
@@ -132,7 +132,7 @@ public:
 	virtual bool open() override;
 	virtual void close() override;
 	virtual void BuildColumns() override;
-	virtual void BindSchema(vector<LogicalType> &return_types, vector<string> &names) override;
+	virtual void BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) override;
 	virtual idx_t FillChunk(DataChunk &output) override;
 	virtual int get_percent_complete() override;
 
