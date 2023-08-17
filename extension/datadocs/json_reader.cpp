@@ -125,7 +125,7 @@ public:
 	}
 
 public:
-	vector<std::unique_ptr<JSONValue>> m_columns;
+	std::vector<std::unique_ptr<JSONValue>> m_columns;
 	IngestColChildrenMap m_children;
 };
 
@@ -169,11 +169,9 @@ public:
 
 protected:
 	void Append() {
-		if (buffer->GetSize() + 1 > buffer->GetCapacity()) {
-			buffer->Reserve(buffer->GetCapacity() * 2);
-		}
 		cur_row = buffer->GetSize();
-		buffer->SetSize(buffer->GetSize() + 1);
+		buffer->Reserve(cur_row + 1);
+		buffer->SetSize(cur_row + 1);
 		++(*length);
 	}
 
@@ -665,11 +663,11 @@ void JSONTopListStruct::BuildColumns(JSONSchema &schema) {
 	JSONBuildColumns(schema.columns, m_children.keys, m_columns, cur_row);
 }
 
-void JSONParser::BindSchema(vector<LogicalType> &return_types, vector<string> &names) {
+void JSONParser::BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) {
 	m_top.BindSchema(return_types, names);
 }
 
-void JSONTopListStruct::BindSchema(vector<LogicalType> &return_types, vector<string> &names) {
+void JSONTopListStruct::BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) {
 	for (auto &col : m_columns) {
 		names.push_back(col->column.GetName());
 		return_types.push_back(col->column.GetType());

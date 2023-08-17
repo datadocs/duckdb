@@ -203,7 +203,7 @@ struct ClusterDBScanOperation {
 	}
 
 	template <class T, class STATE>
-	static void Finalize(STATE &state, T &target, AggregateFinalizeData &finalize_data) {
+	static void Finalize(STATE &state, T &result, AggregateFinalizeData &) {
 		// if (!state->isset) {
 		// 	mask.SetInvalid(idx);
 		// } else {
@@ -276,7 +276,7 @@ struct ClusterDBScanOperation {
 	}
 
 	template <class STATE>
-	static void Destroy(STATE &state, AggregateInputData &aggr_input_data) {
+	static void Destroy(STATE &state, AggregateInputData &) {
 	}
 };
 

@@ -1,9 +1,7 @@
 #include "datadocs_extension.hpp"
 #include "duckdb.hpp"
 
-#ifndef DUCKDB_AMALGAMATION
-#include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
-#endif
+#include "duckdb/main/extension_util.hpp"
 #include "inferrer.h"
 #include "type_conv.h"
 
@@ -231,13 +229,9 @@ static void ParseNumFunc(DataChunk &args, ExpressionState &state, Vector &result
 	UnaryExecutor::Execute<string_t, double>(args.data[0], result, args.size(), ParseNum);
 }
 
-void DatadocsExtension::LoadParseNum(Connection &con) {
-	auto &context = *con.context;
-	auto &catalog = Catalog::GetSystemCatalog(context);
-
-	CreateScalarFunctionInfo parse_num_info(
-	    ScalarFunction("parse_num", {LogicalType::VARCHAR}, LogicalType::DOUBLE, ParseNumFunc));
-	catalog.CreateFunction(context, parse_num_info);
+void DatadocsExtension::LoadParseNum(DatabaseInstance &inst) {
+	ExtensionUtil::RegisterFunction(
+	    inst, ScalarFunction("parse_num", {LogicalType::VARCHAR}, LogicalType::DOUBLE, ParseNumFunc));
 }
 
 } // namespace duckdb

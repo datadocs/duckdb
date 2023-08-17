@@ -77,4 +77,72 @@ unzFile unzOpenMemory(MemBuffer* buffer)
 	return unzOpen2(nullptr, &filefunc32);
 }
 
+static voidpf ZCALLBACK zf_open_file(voidpf opaque, const char* filename, int mode)
+{
+	if (mode != (ZLIB_FILEFUNC_MODE_READ | ZLIB_FILEFUNC_MODE_EXISTING))
+		return nullptr;
+	if (!((duckdb::FileReader*)opaque)->open())
+		return nullptr;
+	return ((duckdb::FileReader*)opaque)->file_handle.get();
+}
+
+long ZCALLBACK zf_seek(voidpf opaque, voidpf stream, uLong offset, int origin)
+{
+	auto reader = (duckdb::FileReader*)opaque;
+	auto handle = (duckdb::FileHandle*)stream;
+	uLong new_pos;
+	switch (origin)
+	{
+	case ZLIB_FILEFUNC_SEEK_CUR:
+		new_pos = handle->SeekPosition() + offset;
+		break;
+	case ZLIB_FILEFUNC_SEEK_END:
+		new_pos = reader->filesize() + offset;
+		break;
+	case ZLIB_FILEFUNC_SEEK_SET:
+		new_pos = offset;
+		break;
+	default:
+		return -1;
+	}
+	if (new_pos >reader->filesize())
+		return 1;
+	handle->Seek(new_pos);
+	return 0;
+}
+
+long ZCALLBACK zf_tell(voidpf opaque, voidpf stream)
+{
+	return ((duckdb::FileHandle*)stream)->SeekPosition();
+}
+
+uLong ZCALLBACK zf_read(voidpf opaque, voidpf stream, void* buf, uLong size)
+{
+	return ((duckdb::FileHandle*)stream)->Read(buf, size);
+}
+
+int ZCALLBACK zf_close(voidpf opaque, voidpf stream)
+{
+	((duckdb::FileHandle*)stream)->Close();
+	return 0;
+}
+
+int ZCALLBACK zf_error(voidpf opaque, voidpf stream)
+{
+	return 0;
+}
+
+unzFile unzOpenFS(duckdb::BaseReader *reader)
+{
+	zlib_filefunc_def filefunc32 = {};
+	filefunc32.zopen_file = zf_open_file;
+	filefunc32.zread_file = zf_read;
+	filefunc32.ztell_file = zf_tell;
+	filefunc32.zseek_file = zf_seek;
+	filefunc32.zclose_file = zf_close;
+	filefunc32.zerror_file = zf_error;
+	filefunc32.opaque = (void*)reader;
+	return unzOpen2(nullptr, &filefunc32);
+}
+
 }
