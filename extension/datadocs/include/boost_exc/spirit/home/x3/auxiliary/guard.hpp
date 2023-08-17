@@ -7,6 +7,8 @@
 #if !defined(BOOST_SPIRIT_X3_GUARD_FERBRUARY_02_2013_0649PM)
 #define BOOST_SPIRIT_X3_GUARD_FERBRUARY_02_2013_0649PM
 
+#define BOOST_NO_CXX98_FUNCTION_BASE
+
 #include <boost/spirit/home/x3/support/context.hpp>
 #include <boost/spirit/home/x3/directive/expect.hpp>
 
