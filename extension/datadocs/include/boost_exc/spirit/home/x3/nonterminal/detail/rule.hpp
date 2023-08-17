@@ -7,6 +7,8 @@
 #if !defined(BOOST_SPIRIT_X3_DETAIL_RULE_JAN_08_2012_0326PM)
 #define BOOST_SPIRIT_X3_DETAIL_RULE_JAN_08_2012_0326PM
 
+#define BOOST_NO_CXX98_FUNCTION_BASE
+
 #include <boost/core/ignore_unused.hpp>
 #include <boost/spirit/home/x3/auxiliary/guard.hpp>
 #include <boost/spirit/home/x3/core/parser.hpp>
