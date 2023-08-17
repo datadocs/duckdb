@@ -1,6 +1,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <cstring>
 #include <regex>
 
 #include "xls/xlscommon.h"

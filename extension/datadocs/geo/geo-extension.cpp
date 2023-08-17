@@ -6,11 +6,8 @@
 #include "accessor-functions.hpp"
 #include "constructor-functions.hpp"
 #include "duckdb.hpp"
-#include "duckdb/catalog/catalog.hpp"
-#include "duckdb/core_functions/aggregate/sum_helpers.hpp"
+#include "duckdb/main/extension_util.hpp"
 #include "duckdb/parser/parsed_data/create_aggregate_function_info.hpp"
-#include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
-#include "duckdb/parser/parsed_data/create_type_info.hpp"
 #include "formatter-functions.hpp"
 #include "geo_aggregate_function.hpp"
 #include "measure-functions.hpp"
@@ -20,22 +17,15 @@
 
 namespace duckdb {
 
-void DatadocsExtension::LoadGeo(Connection &con) {
-	auto &catalog = Catalog::GetSystemCatalog(*con.context);
-
+void DatadocsExtension::LoadGeo(DatabaseInstance &inst) {
 	DDGeoType = LogicalType(LogicalTypeId::BLOB);
 	DDGeoType.SetAlias("GEOGRAPHY");
 	const LogicalType &geo_type = DDGeoType;
 
-	CreateTypeInfo info("Geography", geo_type);
-	info.temporary = true;
-	info.internal = true;
-	catalog.CreateType(*con.context, info);
+	ExtensionUtil::RegisterType(inst, "Geography", geo_type);
 
 	// add geo casts
-	auto &config = DBConfig::GetConfig(*con.context);
-
-	auto &casts = config.GetCastFunctions();
+	auto &casts = DBConfig::GetConfig(inst).GetCastFunctions();
 	casts.RegisterCastFunction(LogicalType::VARCHAR, geo_type, GeoFunctions::CastVarcharToGEO, 100);
 	casts.RegisterCastFunction(geo_type, LogicalType::VARCHAR, GeoFunctions::CastGeoToVarchar);
 
@@ -63,14 +53,15 @@ void DatadocsExtension::LoadGeo(Connection &con) {
 	auto measure_func_set = GetMeasureScalarFunctions(geo_type);
 	geo_function_set.insert(geo_function_set.end(), measure_func_set.begin(), measure_func_set.end());
 
-	for (auto func_set : geo_function_set) {
-		CreateScalarFunctionInfo func_info(func_set);
-		catalog.AddFunction(*con.context, func_info);
+	for (auto &func_set : geo_function_set) {
+		ExtensionUtil::RegisterFunction(inst, func_set);
 	}
 
 	auto cluster_db_scan = GetClusterDBScanAggregateFunction(geo_type);
 	CreateAggregateFunctionInfo cluster_db_scan_func_info(std::move(cluster_db_scan));
-	catalog.CreateFunction(*con.context, cluster_db_scan_func_info);
+	auto &system_catalog = Catalog::GetSystemCatalog(inst);
+	auto data = CatalogTransaction::GetSystemTransaction(inst);
+	system_catalog.CreateFunction(data, cluster_db_scan_func_info);
 }
 
 } // namespace duckdb

@@ -225,7 +225,7 @@ struct IngestColChildrenMap {
 
 	std::unordered_map<string, size_t> keys;
 	size_t cnt_valid;
-	vector<bool> valid;
+	std::vector<bool> valid;
 };
 
 } // namespace duckdb

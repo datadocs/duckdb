@@ -30,7 +30,7 @@ public:
 	virtual bool open() override;
 	virtual void close() override;
 	virtual void BuildColumns() override;
-	virtual void BindSchema(vector<LogicalType> &return_types, vector<string> &names) override;
+	virtual void BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) override;
 	virtual idx_t FillChunk(DataChunk &output) override;
 	virtual int get_percent_complete() override;
 
