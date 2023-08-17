@@ -221,22 +221,22 @@ struct ClusterDBScanOperation {
 		auto &rmask = FlatVector::Validity(result);
 		double epsilon = bdata[ridx] / MS_PER_RADIAN;
 		int minpoints = cdata[ridx];
-		if (!state->isset || frame.first != prev.first || frame.second != prev.second || state->epsilon != epsilon ||
+		if (!state->isset || frame.start != prev.start || frame.end != prev.end || state->epsilon != epsilon ||
 		    state->minpoints != minpoints) {
 			state->isset = true;
 			state->epsilon = epsilon;
 			state->minpoints = minpoints;
-			size_t asize = frame.second - frame.first;
+			size_t asize = frame.end - frame.start;
 			std::vector<GSERIALIZED *> gserArray {};
 			std::vector<int> indexVec(asize, -1);
 			int idx = 0;
 
-			for (size_t i = frame.first; i < frame.second; i++) {
+			for (size_t i = frame.start; i < frame.end; i++) {
 				if (include(i)) {
 					auto gser = Geometry::GetGserialized(adata[i]);
 					if (!Geometry::IsEmpty(gser)) {
 						gserArray.push_back(gser);
-						indexVec[i - frame.first] = idx++;
+						indexVec[i - frame.start] = idx++;
 					} else {
 						Geometry::DestroyGeometry(gser);
 					}
@@ -261,16 +261,16 @@ struct ClusterDBScanOperation {
 				Geometry::DestroyGeometry(gserArray[child_idx]);
 			}
 
-			if (state->clusters[ridx - frame.first] == -1) {
+			if (state->clusters[ridx - frame.start] == -1) {
 				rmask.SetInvalid(ridx);
 			} else {
-				rdata[ridx] = state->clusters[ridx - frame.first];
+				rdata[ridx] = state->clusters[ridx - frame.start];
 			}
 		} else {
-			if (state->clusters[ridx - frame.first] == -1) {
+			if (state->clusters[ridx - frame.start] == -1) {
 				rmask.SetInvalid(ridx);
 			} else {
-				rdata[ridx] = state->clusters[ridx - frame.first];
+				rdata[ridx] = state->clusters[ridx - frame.start];
 			}
 		}
 	}
