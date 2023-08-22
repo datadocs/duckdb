@@ -793,6 +793,7 @@ private:
 };
 
 static void VariantFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+	std::cout << "Variant Function here ================= " << std::endl;
 	D_ASSERT(result.GetType() == DDVariantType);
 	VariantWriter writer(args.data[0].GetType());
 	VectorExecute(args, result, writer, &VariantWriter::Process);
