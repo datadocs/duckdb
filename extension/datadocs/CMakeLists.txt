@@ -81,6 +81,7 @@ set(DATADOCS_EXTENSION_FILES
 	converters.cpp
 	variant.cpp
   parse_num.cpp
+  comparison_functions.cpp
 	xls/src/endian.c
 	xls/src/ole.c
 	xls/src/xls.c
