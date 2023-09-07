@@ -1,6 +1,9 @@
 #pragma once
 
 #include "duckdb.hpp"
+#include "vector_proxy.hpp"
+
+struct yyjson_val;
 
 namespace duckdb {
 
@@ -11,5 +14,11 @@ extern LogicalType DDGeoType;
 extern const LogicalType DDJsonType;
 extern const LogicalType DDNumericType;
 extern const LogicalType DDVariantType;
+
+extern bool IsDatetime(LogicalType type);
+extern bool VariantReadScalar(VectorWriter &result, yyjson_val *val, LogicalType type, bool is_list, yyjson_val *info);
+extern bool VariantToJson(VectorWriter &result, Value v);
+extern LogicalType ConvertLogicalTypeFromString(std::string type);
+extern LogicalType ConvertLogicalTypeFromJson(yyjson_val *type_info);
 
 } // namespace duckdb
