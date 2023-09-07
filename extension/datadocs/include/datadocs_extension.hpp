@@ -14,6 +14,7 @@ private:
 	void LoadVariant(DatabaseInstance &inst);
 	void LoadIngest(DatabaseInstance &inst);
 	void LoadParseNum(DatabaseInstance &inst);
+	void LoadComparisonFunctions(DatabaseInstance &inst);
 };
 
 } // namespace duckdb

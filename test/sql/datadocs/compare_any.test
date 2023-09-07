@@ -1,0 +1,132 @@
+# name: test/sql/datadocs/compare_any.test
+# description: Test compare any function
+# group: [datadocs]
+
+require datadocs
+
+statement ok
+pragma enable_verification
+
+statement ok
+CREATE TABLE test(id INT PRIMARY KEY, is_male BOOLEAN, age INT, salary DECIMAL, distance DOUBLE, name VARCHAR, password BLOB, birthday DATE, next_meeting DATETIME, active_at TIMESTAMP, start_time TIME, bill_every INTERVAL, location GEOGRAPHY, style JSON, extra VARIANT, ip_data STRUCT(ipv4 VARCHAR, country VARCHAR), hobbies VARCHAR[], numbers INT[], styles JSON[], extras VARIANT[]);
+
+statement ok
+INSERT INTO test VALUES (1, false, 10,   105000,  10.2,      'Bob',    b'1239', '2014-01-01', '2014-01-01',          '2014-01-01 20:00:00+20:00', '9:00:00 AM',  '30 days', 'POINT(10.2 99.87)', {'color': 'red'},   variant(DATETIME '2025-01-01 1:00:00'),          {'ipv4': '11.92.83.9', 'country': 'US'}, ['sing', 'dance'],      [1],          ['"bold"'],              NULL), (2, true,  20,   105000,  1.04E+102, 'Bold',   NULL,    '1990-01-01', '2025-01-01 1:00:00',  '2025-01-01 01:00:00-04:00', '9:00:00 AM',  '30 days', 'POINT(-20 -20)',    '"bold"',           variant([{'name': 'Billy'}]),                    {'ipv4': '117.0.0.1', 'country': 'US'},  ['language', 'babies'], [1,2],        NULL,                    [{'name': 'Billy'}]), (3, NULL,  NULL, NULL,    1.4,       'Sandra', b'xyzA', '1990-01-02', '2025-01-01 1:00:00',  '2025-02-02 12:00:00-00:00', '10:00:00 AM', '90 days', 'POINT EMPTY',        NULL,              NULL,                                            NULL,                                    NULL,                   NULL,         NULL,                    NULL), (4, NULL,  40,   60000.5, 4.00E+2,   NULL,     b'1442', NULL,         NULL,                  NULL,                        NULL,          NULL,      'POINT(-20 -20)',    '"bold"',           variant({'COUNTRY': 'RU', 'IPV4': '117.0.0.1'}), {'ipv4': '117.0.0.1', 'country': 'RU'},  [NULL, NULL],           [NULL, NULL], ['"bold"'],              [1, 'a']), (5, false, 10,   10,      10,        'Amy',    b'191',  '1990-01-01', '2025-02-02 12:00:00', '2025-02-02 12:00:00-00:00', '8:00:00 AM',  '5 days',  NULL,                ['bold', 'italic'], NULL,                                            {'ipv4': '2.3.2.9', 'country': 'RU'},    [],                     [],           ['"bold"', '"italic"'], NULL);
+
+# Any columns can be equal if it has a null value.
+query I
+SELECT COMPARE_ANY(is_male, ip_data) = 0 FROM test;
+----
+false
+false
+true 
+false
+false
+
+# Comparing with Numeric supetype
+query I
+SELECT COMPARE_ANY(age, salary) = 0 AND COMPARE_ANY(salary, distance) = 0 AND COMPARE_ANY(age, distance) = 0 FROM test;
+----
+false
+false
+false
+false
+true
+
+# Comparing with date/time supertype
+query I
+SELECT COMPARE_ANY(birthday, next_meeting) = 0 AND COMPARE_ANY(birthday, active_at) = 0 AND COMPARE_ANY(next_meeting, active_at) = 0 FROM test;
+----
+true
+false
+false
+true
+false
+
+# Comaring two different array-types, which may be the same if null, an empty array, or an equal-sized array of null elements.
+query I
+SELECT COMPARE_ANY(numbers, hobbies) = 0 FROM test;
+----
+false
+false
+true
+true
+true
+
+# JSON decays to underlying type
+query I
+SELECT COMPARE_ANY(style, name) = 0 AND COMPARE_ANY(style, name, ci:=false) = 1 FROM test;
+----
+false
+true
+false
+false
+false
+
+# Variant compared with JSON
+query I
+SELECT COMPARE_ANY(extra, ip_data) = 0 AND COMPARE_ANY(extra, ip_data, keys_ci:=false) = -1 FROM test;
+----
+false
+false
+false
+true
+false
+
+# String is not equal to a GEO value. GEO compared on String-representation.
+query I
+SELECT COMPARE_ANY(location, 'POINT(-20 -20)') = 0 OR COMPARE_ANY(location, ST_GEOGFROM('POINT EMPTY')) = 0 FROM test;
+----
+false
+false
+true
+false
+false
+
+# JSON can be equal to JSON[]
+query I
+SELECT COMPARE_ANY(styles, style) = 0 FROM test;
+----
+false
+false
+true
+false
+true
+
+# VARIANT can be equal to VARIANT[]
+query I
+SELECT COMPARE_ANY(extras, extra) = 0 FROM test;
+----
+false
+true
+true
+false
+true
+
+# Sorting for various edge-values
+query I
+SELECT COMPARE_ANY('-Inf'::FLOAT, 'NAN'::FLOAT) + COMPARE_ANY(NULL, '-Inf'::FLOAT) + COMPARE_ANY([], [NULL]) + COMPARE_ANY('{}'::JSON, {a: NULL});
+----
+-4
+
+# Comparing two structs with no params set
+query I
+SELECT COMPARE_ANY({'age': age, 'STYLE': style}, {'style': styles, 'age': distance}) = 0 FROM test;
+----
+false
+false
+false
+false
+true
+
+# Comparing two structs with various params set
+query I
+SELECT COMPARE_ANY({'a': 'B'}, {'A': 'b'}) = 0 AND COMPARE_ANY({'a': 'B'}, {'A': 'b'}, ci:=false) = -1 AND COMPARE_ANY({'a': 'B'}, {'A': 'b'}, keys_ci:=false) = 1;
+----
+true
+
+# Comparing two structs
+query I
+SELECT COMPARE_ANY({'b': 'd', 'a': 'z'}, {'d': 'z', 'a': 'c'});
+----
+1
