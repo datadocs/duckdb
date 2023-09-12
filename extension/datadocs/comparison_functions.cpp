@@ -1,7 +1,10 @@
 #include "datadocs.hpp"
 #include "datadocs_extension.hpp"
 #include "duckdb.hpp"
+#include "duckdb/function/scalar/string_functions.hpp"
 #include "duckdb/main/extension_util.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "json_common.hpp"
 #include "json_functions.hpp"
@@ -41,16 +44,19 @@ static string ToLowerCase(string str) {
 	return result;
 }
 
+static bool TypeIncludeDate(LogicalType type) {
+	if (IsDatetime(type) && type != LogicalType::TIME) {
+		return true;
+	}
+	return false;
+}
+
 static ComparisonType LogicalTypeToComparisonType(LogicalType type) {
 	if (type.IsNumeric()) {
 		return ComparisonType::NUMERIC;
 	}
-	if (IsDatetime(type)) {
-		if (LogicalType::TypeIsTimestamp(type)) {
-			return ComparisonType::TIME;
-		} else {
-			return ComparisonType::DATETIME;
-		}
+	if (TypeIncludeDate(type)) {
+		return ComparisonType::DATETIME;
 	}
 	if (type == DDGeoType) {
 		return ComparisonType::GEO;
@@ -70,6 +76,10 @@ static ComparisonType LogicalTypeToComparisonType(LogicalType type) {
 
 	case LogicalType::INTERVAL: {
 		return ComparisonType::INTERVAL;
+	}
+
+	case LogicalType::TIME: {
+		return ComparisonType::TIME;
 	}
 
 	case LogicalTypeId::LIST: {
@@ -97,7 +107,8 @@ static bool IsNestedType(LogicalType type) {
 }
 
 static int CompareType(LogicalType type1, LogicalType type2) {
-	if ((type1 == type2) || (IsDatetime(type1) && IsDatetime(type2)) || (type1.IsNumeric() && type2.IsNumeric())) {
+	if ((type1 == type2) || (TypeIncludeDate(type1) && TypeIncludeDate(type2)) ||
+	    (type1.IsNumeric() && type2.IsNumeric())) {
 		return COMPARISON_RS_EQUAL;
 	}
 	auto comparison_type1 = LogicalTypeToComparisonType(type1);
@@ -305,7 +316,8 @@ static int CompareAnyValue(Value v1, Value v2, bool ci, bool keys_ci) {
 		} else if (v1_isnull || v2_isnull) {
 			return v1_isnull ? COMPARISON_RS_LESS : COMPARISON_RS_BIGGER;
 		}
-		if ((type1 == type2) || (IsDatetime(type1) && IsDatetime(type2)) || (type1.IsNumeric() && type2.IsNumeric())) {
+		if ((type1 == type2) || (TypeIncludeDate(type1) && TypeIncludeDate(type2)) ||
+		    (type1.IsNumeric() && type2.IsNumeric())) {
 			new_v1 = (ci && v1.type() == LogicalType::VARCHAR) ? Value(ToLowerCase(v1.GetValue<string>())) : v1;
 			new_v2 = (ci && v2.type() == LogicalType::VARCHAR) ? Value(ToLowerCase(v2.GetValue<string>())) : v2;
 			if (new_v1 == new_v2) {
@@ -321,6 +333,252 @@ static int CompareAnyValue(Value v1, Value v2, bool ci, bool keys_ci) {
 	return 1;
 }
 
+struct CompareAny {
+	template <class T>
+	static inline int Operation(const T &left, const T &right) {
+		if (left == right)
+			return COMPARISON_RS_EQUAL;
+		if (left < right)
+			return COMPARISON_RS_LESS;
+		return COMPARISON_RS_BIGGER;
+	}
+};
+
+template <class T, class OP>
+static inline void TemplatedExecute(Vector &left, Vector &right, Vector &result, idx_t count) {
+	auto ldata = FlatVector::GetData<T>(left);
+	auto rdata = FlatVector::GetData<T>(right);
+	auto left_vector_type = left.GetVectorType();
+	auto right_vector_type = right.GetVectorType();
+	auto LEFT_CONSTANT = left_vector_type == VectorType::CONSTANT_VECTOR;
+	auto RIGHT_CONSTANT = right_vector_type == VectorType::CONSTANT_VECTOR;
+
+	UnifiedVectorFormat vdata1, vdata2;
+	left.ToUnifiedFormat(count, vdata1);
+	right.ToUnifiedFormat(count, vdata2);
+	result.SetVectorType(VectorType::FLAT_VECTOR);
+	auto result_data = FlatVector::GetData<int>(result);
+	auto left_valid = LEFT_CONSTANT && !ConstantVector::IsNull(left);
+	auto right_valid = RIGHT_CONSTANT && !ConstantVector::IsNull(right);
+
+	for (idx_t i = 0; i < count; i++) {
+		auto idx1 = vdata1.sel->get_index(i);
+		auto idx2 = vdata2.sel->get_index(i);
+		bool v1_valid = LEFT_CONSTANT ? left_valid : vdata1.validity.RowIsValid(idx1);
+		bool v2_valid = RIGHT_CONSTANT ? right_valid : vdata2.validity.RowIsValid(idx2);
+		if (v1_valid && v2_valid) {
+			auto lentry = ldata[LEFT_CONSTANT ? 0 : idx1];
+			auto rentry = rdata[RIGHT_CONSTANT ? 0 : idx2];
+			result_data[i] = OP::Operation(lentry, rentry);
+		} else if (!v1_valid && !v2_valid) {
+			result_data[i] = COMPARISON_RS_EQUAL;
+		} else {
+			result_data[i] = v1_valid ? COMPARISON_RS_BIGGER : COMPARISON_RS_LESS;
+		}
+	}
+}
+
+static void CompareAnyBaseVectors(Vector &left, Vector &right, Vector &result, idx_t count) {
+	switch (left.GetType().InternalType()) {
+	case PhysicalType::BOOL:
+	case PhysicalType::INT8:
+		TemplatedExecute<int8_t, CompareAny>(left, right, result, count);
+		break;
+	case PhysicalType::INT16:
+		TemplatedExecute<int16_t, CompareAny>(left, right, result, count);
+		break;
+	case PhysicalType::INT32:
+		TemplatedExecute<int32_t, CompareAny>(left, right, result, count);
+		break;
+	case PhysicalType::INT64:
+		TemplatedExecute<int64_t, CompareAny>(left, right, result, count);
+		break;
+	case PhysicalType::UINT8:
+		TemplatedExecute<uint8_t, CompareAny>(left, right, result, count);
+		break;
+	case PhysicalType::UINT16:
+		TemplatedExecute<uint16_t, CompareAny>(left, right, result, count);
+		break;
+	case PhysicalType::UINT32:
+		TemplatedExecute<uint32_t, CompareAny>(left, right, result, count);
+		break;
+	case PhysicalType::UINT64:
+		TemplatedExecute<uint64_t, CompareAny>(left, right, result, count);
+		break;
+	case PhysicalType::INT128:
+		TemplatedExecute<hugeint_t, CompareAny>(left, right, result, count);
+		break;
+	case PhysicalType::FLOAT:
+		TemplatedExecute<float, CompareAny>(left, right, result, count);
+		break;
+	case PhysicalType::DOUBLE:
+		TemplatedExecute<double, CompareAny>(left, right, result, count);
+		break;
+	case PhysicalType::INTERVAL:
+		TemplatedExecute<interval_t, CompareAny>(left, right, result, count);
+		break;
+	case PhysicalType::VARCHAR:
+		TemplatedExecute<string_t, CompareAny>(left, right, result, count);
+		break;
+	default:
+		throw InternalException("Invalid type for comparison");
+	}
+}
+
+static void CompareAnyVectorEachValue(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci) {
+	UnifiedVectorFormat vdata1, vdata2;
+	left.ToUnifiedFormat(count, vdata1);
+	right.ToUnifiedFormat(count, vdata2);
+	auto result_data = FlatVector::GetData<int>(result);
+	for (idx_t i = 0; i < count; i++) {
+		auto idx1 = vdata1.sel->get_index(i);
+		auto idx2 = vdata2.sel->get_index(i);
+		bool v1_valid = vdata1.validity.RowIsValid(idx1);
+		bool v2_valid = vdata2.validity.RowIsValid(idx2);
+		if (v1_valid && v2_valid) {
+			result_data[i] = CompareAnyValue(left.GetValue(idx1), right.GetValue(idx2), ci, keys_ci);
+		} else if (!v1_valid && !v2_valid) {
+			result_data[i] = COMPARISON_RS_EQUAL;
+		} else {
+			result_data[i] = v1_valid ? COMPARISON_RS_BIGGER : COMPARISON_RS_LESS;
+		}
+	}
+}
+
+static void CompareAnyVectorsType(Vector &left, Vector &right, Vector &result, idx_t count) {
+	auto type1 = left.GetType();
+	auto type2 = right.GetType();
+	UnifiedVectorFormat vdata1, vdata2;
+	left.ToUnifiedFormat(count, vdata1);
+	right.ToUnifiedFormat(count, vdata2);
+	auto result_data = FlatVector::GetData<int>(result);
+	auto type_compare = CompareType(type1, type2);
+	for (idx_t i = 0; i < count; i++) {
+		auto idx1 = vdata1.sel->get_index(i);
+		auto idx2 = vdata2.sel->get_index(i);
+		bool v1_valid = vdata1.validity.RowIsValid(idx1);
+		bool v2_valid = vdata2.validity.RowIsValid(idx2);
+		if (v1_valid && v2_valid) {
+			result_data[i] = type_compare;
+		} else if (!v1_valid && !v2_valid) {
+			result_data[i] = COMPARISON_RS_EQUAL;
+		} else {
+			result_data[i] = v1_valid ? COMPARISON_RS_BIGGER : COMPARISON_RS_LESS;
+		}
+	}
+}
+
+static void CompareAnyNestedVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci) {
+	auto type1 = left.GetType();
+	auto type2 = right.GetType();
+	if (type1.id() != type2.id()) {
+		CompareAnyVectorsType(left, right, result, count);
+	} else if (type1.id() == LogicalTypeId::LIST) {
+		CompareAnyVectorEachValue(left, right, result, count, ci, keys_ci);
+	} else if (type1.id() == LogicalTypeId::STRUCT) {
+		child_list_t<LogicalType> child_types1 = StructType::GetChildTypes(type1);
+		if (keys_ci) {
+			std::transform(child_types1.begin(), child_types1.end(), child_types1.begin(),
+			               [](std::pair<string, LogicalType> item) {
+				               return std::pair<string, LogicalType>(ToLowerCase(item.first), item.second);
+			               });
+		}
+		std::map<string, idx_t> key_idx_map1 {};
+		for (idx_t i = 0; i < child_types1.size(); i++) {
+			auto key = keys_ci ? ToLowerCase(child_types1[i].first) : child_types1[i].first;
+			key_idx_map1.insert(std::pair<string, idx_t>(key, i));
+		}
+		// sort child types 1 by key
+		std::sort(child_types1.begin(), child_types1.end(),
+		          [](std::pair<string, LogicalType> const &a, std::pair<string, LogicalType> const &b) {
+			          return a.first < b.first;
+		          });
+		auto child_types2 = StructType::GetChildTypes(type2);
+		if (keys_ci) {
+			std::transform(child_types2.begin(), child_types2.end(), child_types2.begin(),
+			               [](std::pair<string, LogicalType> item) {
+				               return std::pair<string, LogicalType>(ToLowerCase(item.first), item.second);
+			               });
+		}
+		std::map<string, idx_t> key_idx_map2 {};
+		for (idx_t i = 0; i < child_types2.size(); i++) {
+			auto key = keys_ci ? ToLowerCase(child_types2[i].first) : child_types2[i].first;
+			key_idx_map2.insert(std::pair<string, idx_t>(key, i));
+		}
+		// sort child types 2 by key
+		std::sort(child_types2.begin(), child_types2.end(),
+		          [](std::pair<string, LogicalType> const &a, std::pair<string, LogicalType> const &b) {
+			          return a.first < b.first;
+		          });
+		auto struct_size = std::min(child_types1.size(), child_types2.size());
+		auto size_compare = child_types1.size() < child_types2.size()   ? COMPARISON_RS_LESS
+		                    : child_types1.size() > child_types2.size() ? COMPARISON_RS_BIGGER
+		                                                                : COMPARISON_RS_EQUAL;
+		UnifiedVectorFormat vdata1, vdata2;
+		left.ToUnifiedFormat(count, vdata1);
+		right.ToUnifiedFormat(count, vdata2);
+		auto result_data = FlatVector::GetData<int>(result);
+		auto &left_children_vec = StructVector::GetEntries(left);
+		auto &right_children_vec = StructVector::GetEntries(right);
+		for (idx_t i = 0; i < count; i++) {
+			auto idx1 = vdata1.sel->get_index(i);
+			auto idx2 = vdata2.sel->get_index(i);
+			bool v1_valid = vdata1.validity.RowIsValid(idx1);
+			bool v2_valid = vdata2.validity.RowIsValid(idx2);
+			if (v1_valid && v2_valid) {
+				for (idx_t idx = 0; idx < struct_size; idx++) {
+					auto key1 = keys_ci ? ToLowerCase(child_types1[idx].first) : child_types1[idx].first;
+					auto key2 = keys_ci ? ToLowerCase(child_types2[idx].first) : child_types2[idx].first;
+					if (key1 != key2) {
+						result_data[i] = key1 > key2 ? COMPARISON_RS_BIGGER : COMPARISON_RS_LESS;
+						break;
+					}
+					result_data[i] =
+					    CompareAnyValue(left_children_vec[key_idx_map1[key1]]->GetValue(idx1),
+					                    right_children_vec[key_idx_map2[key2]]->GetValue(idx2), ci, keys_ci);
+					if (result_data[i] != COMPARISON_RS_EQUAL) {
+						break;
+					}
+				}
+				if (result_data[i] == COMPARISON_RS_EQUAL) {
+					result_data[i] = size_compare;
+				}
+			} else if (!v1_valid && !v2_valid) {
+				result_data[i] = COMPARISON_RS_EQUAL;
+			} else {
+				result_data[i] = v1_valid ? COMPARISON_RS_BIGGER : COMPARISON_RS_LESS;
+			}
+		}
+	}
+}
+
+static void CompareAnyVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci) {
+	auto type1 = left.GetType();
+	auto type2 = right.GetType();
+	if (left.GetVectorType() == VectorType::CONSTANT_VECTOR && right.GetVectorType() == VectorType::CONSTANT_VECTOR) {
+		CompareAnyVectorEachValue(left, right, result, count, ci, keys_ci);
+	} else if (IsDecayableType(type1) || IsDecayableType(type2)) {
+		// handle for Decay type
+		CompareAnyVectorEachValue(left, right, result, count, ci, keys_ci);
+	} else if (IsNestedType(type1) && IsNestedType(type2)) {
+		// handle for nested type
+		CompareAnyNestedVectors(left, right, result, count, ci, keys_ci);
+	} else {
+		// handle for base type
+		if ((type1 == type2) || (TypeIncludeDate(type1) && TypeIncludeDate(type2)) ||
+		    (type1.IsNumeric() && type2.IsNumeric())) {
+			if (type1 == type2) {
+				CompareAnyBaseVectors(left, right, result, count);
+			} else {
+				CompareAnyVectorEachValue(left, right, result, count, ci, keys_ci);
+			}
+		} else {
+			// Compare Type
+			CompareAnyVectorsType(left, right, result, count);
+		}
+	}
+}
+
 static void CompareAnyFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(result.GetType() == LogicalType::INTEGER);
 	auto first_operand = args.data[0];
@@ -330,38 +588,40 @@ static void CompareAnyFunction(DataChunk &args, ExpressionState &state, Vector &
 	D_ASSERT(ci_vec.GetType() == LogicalType::BOOLEAN);
 	D_ASSERT(keys_ci_vec.GetType() == LogicalType::BOOLEAN);
 	auto count = args.size();
-	auto result_data = FlatVector::GetData<int>(result);
 
-	UnifiedVectorFormat vdata1, vdata2, vdata3, vdata4, vdata5, vdata6;
-	first_operand.ToUnifiedFormat(count, vdata1);
-	second_operand.ToUnifiedFormat(count, vdata2);
+	if (ci_vec.GetVectorType() != VectorType::CONSTANT_VECTOR ||
+	    keys_ci_vec.GetVectorType() != VectorType::CONSTANT_VECTOR) {
+		throw Exception("'ci' or 'keys_ci' must be constant!");
+		return;
+	}
+
+	UnifiedVectorFormat vdata3, vdata4;
 	ci_vec.ToUnifiedFormat(count, vdata3);
 	keys_ci_vec.ToUnifiedFormat(count, vdata4);
-	auto &result_validity = FlatVector::Validity(result);
 
-	for (idx_t i = 0; i < count; i++) {
-		auto idx1 = vdata1.sel->get_index(i);
-		auto idx2 = vdata2.sel->get_index(i);
-		auto idx3 = vdata3.sel->get_index(i);
-		auto idx4 = vdata4.sel->get_index(i);
-		bool ci = vdata3.validity.RowIsValid(idx3) ? ci_vec.GetValue(idx3).GetValue<bool>() : ci_default_value;
-		bool keys_ci =
-		    vdata4.validity.RowIsValid(idx4) ? keys_ci_vec.GetValue(idx4).GetValue<bool>() : keys_ci_default_value;
-		bool v1_valid = vdata1.validity.RowIsValid(idx1);
-		bool v2_valid = vdata2.validity.RowIsValid(idx2);
-		if (v1_valid && v2_valid) {
-			result_data[i] = CompareAnyValue(first_operand.GetValue(idx1), second_operand.GetValue(idx2), ci, keys_ci);
-		} else if (!v1_valid && !v2_valid) {
-			result_data[i] = COMPARISON_RS_EQUAL;
-		} else {
-			result_data[i] = v1_valid ? COMPARISON_RS_BIGGER : COMPARISON_RS_LESS;
-		}
+	bool ci = ci_default_value;
+	bool keys_ci = keys_ci_default_value;
+	if (count > 0) {
+		ci = vdata3.validity.RowIsValid(0) ? ci_vec.GetValue(0).GetValue<bool>() : ci_default_value;
+		keys_ci = vdata4.validity.RowIsValid(0) ? keys_ci_vec.GetValue(0).GetValue<bool>() : keys_ci_default_value;
 	}
+
+	CompareAnyVectors(first_operand, second_operand, result, count, ci, keys_ci);
 
 	if (first_operand.GetVectorType() == VectorType::CONSTANT_VECTOR &&
 	    second_operand.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 		result.SetVectorType(VectorType::CONSTANT_VECTOR);
 	}
+}
+
+unique_ptr<Expression> CreateBoundToLower(ClientContext &context, unique_ptr<Expression> expr) {
+	vector<unique_ptr<Expression>> arguments;
+	arguments.push_back(std::move(expr));
+	auto lower_function = LowerFun::GetFunction();
+	auto return_type = lower_function.return_type;
+	auto result =
+	    make_uniq<BoundFunctionExpression>(return_type, std::move(lower_function), std::move(arguments), nullptr);
+	return std::move(result);
 }
 
 static unique_ptr<FunctionData> CompareAnyBind(ClientContext &context, ScalarFunction &bound_function,
@@ -375,18 +635,7 @@ static unique_ptr<FunctionData> CompareAnyBind(ClientContext &context, ScalarFun
 		throw Exception("Can't compare invalid operands");
 		return nullptr;
 	}
-	// // Check first operand valid
-	// auto &first_operand = arguments[0];
-	// if (first_operand->alias != "") {
-	// 	throw Exception("First operand can't have alias");
-	// 	return nullptr;
-	// }
-	// // Check second operand valid
-	// auto &second_operand = arguments[1];
-	// if (second_operand->alias != "") {
-	// 	throw Exception("Second operand can't have alias");
-	// 	return nullptr;
-	// }
+
 	map<ComparisonArgumentType, idx_t> arguments_maps;
 	for (idx_t i = 2; i < arguments.size(); i++) {
 		auto &child = arguments[i];
@@ -411,6 +660,41 @@ static unique_ptr<FunctionData> CompareAnyBind(ClientContext &context, ScalarFun
 	arguments.resize(4);
 	for (idx_t i = 0; i < 2; i++) {
 		arguments[i + 2] = std::move(option_arguments[i]);
+	}
+
+	Value ci_value = Value::BOOLEAN(true);
+	if (arguments[2]->type == ExpressionType::OPERATOR_CAST) {
+		auto child = std::move(arguments[2]->Cast<BoundCastExpression>().child);
+		if (child->type != ExpressionType::VALUE_CONSTANT) {
+			throw Exception("'ci' must be constant!");
+		}
+		ci_value = child->Cast<BoundConstantExpression>().value.DefaultCastAs(arguments[2]->return_type);
+		arguments[2] = BoundCastExpression::AddCastToType(context, std::move(child), arguments[2]->return_type);
+	} else {
+		if (arguments[2]->type != ExpressionType::VALUE_CONSTANT) {
+			throw Exception("'ci' must be constant!");
+		}
+		ci_value = arguments[2]->Cast<BoundConstantExpression>().value;
+	}
+	if (ci_value.GetValue<bool>()) {
+		if (arguments[0]->return_type == LogicalType::VARCHAR) {
+			arguments[0] = CreateBoundToLower(context, std::move(arguments[0]));
+		}
+
+		if (arguments[1]->return_type == LogicalType::VARCHAR) {
+			arguments[1] = CreateBoundToLower(context, std::move(arguments[1]));
+		}
+	}
+	auto type1 = arguments[0]->return_type;
+	auto type2 = arguments[1]->return_type;
+	if (type1 != type2) {
+		if ((type1.IsNumeric() && type2.IsNumeric()) || (TypeIncludeDate(type1) && TypeIncludeDate(type2))) {
+			auto input_type = BoundComparisonExpression::BindComparison(type1, type2);
+			arguments[0] = BoundCastExpression::AddCastToType(context, std::move(arguments[0]), input_type,
+			                                                  input_type.id() == LogicalTypeId::ENUM);
+			arguments[1] = BoundCastExpression::AddCastToType(context, std::move(arguments[1]), input_type,
+			                                                  input_type.id() == LogicalTypeId::ENUM);
+		}
 	}
 	return nullptr;
 }
