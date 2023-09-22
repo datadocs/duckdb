@@ -11,6 +11,7 @@ void DatadocsExtension::Load(DuckDB &db) {
 	LoadIngest(inst);
 	LoadParseNum(inst);
 	LoadComparisonFunctions(inst);
+	LoadVariantOperators(inst);
 }
 
 string DatadocsExtension::Name() {
