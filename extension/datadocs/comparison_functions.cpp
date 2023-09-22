@@ -203,7 +203,7 @@ static ComparisonType LogicalTypeToComparisonType(LogicalType type) {
  * @return true
  * @return false
  */
-static bool IsDecayableType(LogicalType type) {
+bool IsDecayableType(LogicalType type) {
 	return type == DDJsonType || type == DDVariantType;
 }
 
@@ -249,7 +249,7 @@ static int CompareType(LogicalType type1, LogicalType type2) {
  * @param alc
  * @return Value
  */
-static Value GetDecayVariantValue(Value v, yyjson_alc *alc) {
+Value GetDecayVariantValue(Value v, yyjson_alc *alc) {
 	D_ASSERT(v.type() == DDVariantType);
 	auto &children = StructValue::GetChildren(v);
 	if (children.size() != 3) {
@@ -333,7 +333,7 @@ static Value GetDecayJsonValueFromVal(yyjson_val *val, yyjson_alc *alc) {
  * @param alc
  * @return Value
  */
-static Value GetDecayJsonValue(Value v, yyjson_alc *alc) {
+Value GetDecayJsonValue(Value v, yyjson_alc *alc) {
 	auto doc = JSONCommon::ReadDocument(v.GetValueUnsafe<string_t>(), JSONCommon::READ_FLAG, alc);
 	yyjson_val *val = yyjson_doc_get_root(doc);
 	return GetDecayJsonValueFromVal(val, alc);
