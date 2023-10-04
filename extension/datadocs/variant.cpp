@@ -2,6 +2,7 @@
 #include "datadocs.hpp"
 #include "datadocs_extension.hpp"
 #include "duckdb.hpp"
+#include "duckdb/common/extra_type_info.hpp";
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/decimal.hpp"
@@ -84,7 +85,6 @@ static bool TransformVariantArray(yyjson_val *arrays[], yyjson_alc *alc, Vector 
 static bool TransformVariantObjectInternal(yyjson_val *objects[], yyjson_alc *alc, Vector &result, const idx_t count,
                                            JSONTransformOptions &options, vector<LogicalType> infos,
                                            CastParameters &parameters, vector<yyjson_val *> extra_infos);
-static void TransformVariantArrayFunc(Vector &source, Vector &result, idx_t count);
 
 LogicalType ConvertLogicalTypeFromString(std::string type) {
 	if (type == "STRING") {
@@ -1348,6 +1348,134 @@ bool VariantToJson(VectorWriter &result, Value v) {
 	return true;
 }
 
+template <typename T>
+bool VariantWriteDecimalValue(VectorWriter &result, Value v) {
+	LogicalType type = v.type();
+	VariantWriter variant_writer(type);
+	T raw_val;
+	string *error_message = nullptr;
+	DecimalTypeInfo info = type.AuxInfo()->Cast<DecimalTypeInfo>();
+	if (!TryCastToDecimal::Operation(v.GetValue<T>(), raw_val, error_message, info.width, info.scale)) {
+		throw Exception("Cast to Decimal fail");
+		return false;
+	}
+	return variant_writer.Process(result, VectorHolder(raw_val)[0]);
+}
+
+bool VariantWriteValue(VectorWriter &result, Value v) {
+	LogicalType type = v.type();
+	VariantWriter variant_writer(type);
+	bool is_list = false;
+	if (type.id() == LogicalTypeId::LIST) {
+		Vector vec(v);
+		return variant_writer.Process(result, VectorHolder(vec, 1)[0]);
+	}
+	switch (type.id()) {
+	case LogicalTypeId::VARCHAR: {
+		return variant_writer.Process(result, VectorHolder(v.GetValueUnsafe<string_t>())[0]);
+	} break;
+
+	case LogicalTypeId::BOOLEAN: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<bool>())[0]);
+	} break;
+
+	case LogicalTypeId::TINYINT: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<int8_t>())[0]);
+	} break;
+
+	case LogicalTypeId::SMALLINT: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<int16_t>())[0]);
+	} break;
+
+	case LogicalTypeId::INTEGER: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<int32_t>())[0]);
+	} break;
+
+	case LogicalTypeId::BIGINT: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<int64_t>())[0]);
+	} break;
+
+	case LogicalTypeId::HUGEINT: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<hugeint_t>())[0]);
+	} break;
+
+	case LogicalTypeId::UTINYINT: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<uint8_t>())[0]);
+	} break;
+
+	case LogicalTypeId::USMALLINT: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<uint16_t>())[0]);
+	} break;
+
+	case LogicalTypeId::UINTEGER: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<uint32_t>())[0]);
+	} break;
+
+	case LogicalTypeId::UBIGINT: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<uint64_t>())[0]);
+	} break;
+
+	case LogicalTypeId::FLOAT: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<float>())[0]);
+	} break;
+
+	case LogicalTypeId::DOUBLE: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<double>())[0]);
+	} break;
+
+	case LogicalTypeId::DECIMAL: {
+		switch (type.InternalType()) {
+		case PhysicalType::INT16: {
+			return VariantWriteDecimalValue<int16_t>(result, v);
+		}
+		case PhysicalType::INT32: {
+			return VariantWriteDecimalValue<int32_t>(result, v);
+		}
+		case PhysicalType::INT64: {
+			return VariantWriteDecimalValue<int64_t>(result, v);
+		}
+		case PhysicalType::INT128: {
+			return VariantWriteDecimalValue<hugeint_t>(result, v);
+		}
+		default:
+			throw Exception("Physical type false!");
+			break;
+		}
+	} break;
+
+	case LogicalTypeId::DATE: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<date_t>())[0]);
+	} break;
+
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_TZ: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<timestamp_t>())[0]);
+	} break;
+
+	case LogicalTypeId::INTERVAL: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<interval_t>())[0]);
+	} break;
+
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_TZ: {
+		return variant_writer.Process(result, VectorHolder(v.GetValue<dtime_t>())[0]);
+	}
+
+	case LogicalTypeId::BLOB: {
+		if (type == LogicalType::BLOB) {
+			return variant_writer.Process(result, VectorHolder(v.GetValueUnsafe<string_t>())[0]);
+		}
+	}
+
+	default:
+		break;
+	}
+	return true;
+}
+
 static bool VariantError(LogicalType source, string *error_message, LogicalType target) {
 	string e = "Failed to convert variant " + source.ToString() + " to " + target.ToString();
 	HandleCastError::AssignError(e, error_message);
@@ -2229,7 +2357,7 @@ static void VariantToJsonFunc(DataChunk &args, ExpressionState &state, Vector &r
 	}
 }
 
-static void TransformVariantArrayFunc(Vector &source, Vector &result, idx_t count) {
+void TransformVariantArrayFunc(Vector &source, Vector &result, idx_t count) {
 	JSONAllocator alc {Allocator::DefaultAllocator()};
 	auto result_child = ListVector::GetEntry(result);
 	UnifiedVectorFormat vdata;
@@ -2827,6 +2955,7 @@ void DatadocsExtension::LoadVariant(DatabaseInstance &inst) {
 	auto any_to_variant_cost = casts.ImplicitCastCost(LogicalType::ANY, DDVariantType);
 	casts.RegisterCastFunction(LogicalType::ANY, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
 	casts.RegisterCastFunction(LogicalType::VARCHAR, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
+	casts.RegisterCastFunction(LogicalType::BLOB, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
 	casts.RegisterCastFunction(DDJsonType, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
 	casts.RegisterCastFunction(list_type, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
 	casts.RegisterCastFunction(struct_type, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);

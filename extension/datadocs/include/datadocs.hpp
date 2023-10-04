@@ -15,6 +15,7 @@ extern LogicalType DDGeoType;
 extern const LogicalType DDJsonType;
 extern const LogicalType DDNumericType;
 extern const LogicalType DDVariantType;
+extern const LogicalType DDVariantArrayType;
 
 extern bool IsDatetime(LogicalType type);
 extern bool IsDecayableType(LogicalType type);
@@ -25,5 +26,6 @@ extern bool VariantToJson(VectorWriter &result, Value v);
 bool VariantWriteValue(VectorWriter &result, Value v);
 extern LogicalType ConvertLogicalTypeFromString(std::string type);
 extern LogicalType ConvertLogicalTypeFromJson(yyjson_val *type_info);
+extern void TransformVariantArrayFunc(Vector &source, Vector &result, idx_t count);
 
 } // namespace duckdb
