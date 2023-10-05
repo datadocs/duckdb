@@ -1,0 +1,211 @@
+# name: test/sql/datadocs/operator_any.test
+# description: Test binary_op_any and unary_op_any functions
+# group: [datadocs]
+
+require datadocs
+
+statement ok
+pragma enable_verification
+
+statement ok
+CREATE TABLE test_op_any(id INT PRIMARY KEY, variant_col VARIANT);
+
+statement ok
+INSERT INTO test_op_any VALUES (1, 2), (2, DATE '2022-01-02'), (3, INTERVAL 1 days), (4, 'abc'), (5, [1, 2, 3]), (6, '\xAA'::BLOB), (7, 3::DECIMAL);
+
+# Add (+) operator for any type
+query I
+SELECT binary_op_any('+', variant_col, 2) FROM test_op_any;
+----
+4
+2022-01-04
+NULL
+NULL
+NULL
+NULL
+5.000000000
+
+query I
+SELECT binary_op_any('+', variant_col, INTERVAL 1 days) FROM test_op_any;
+----
+NULL
+2022-01-03
+2 days
+NULL
+NULL
+NULL
+NULL
+
+# Subtract (-) operator for any type
+query I
+SELECT binary_op_any('-', variant_col, 2) FROM test_op_any;
+----
+0
+2021-12-31
+NULL
+NULL
+NULL
+NULL
+1.000000000
+
+query I
+SELECT binary_op_any('-', variant_col, INTERVAL 1 days) FROM test_op_any;
+----
+NULL
+2022-01-01
+00:00:00
+NULL
+NULL
+NULL
+NULL
+
+# Concat (||) operator for any type
+query I
+SELECT binary_op_any('||', variant_col, ' trailing') FROM test_op_any;
+----
+2 trailing
+2022-01-02 trailing
+1 day trailing
+abc trailing
+[1, 2, 3] trailing
+NULL
+3.000000000 trailing
+
+query I
+SELECT binary_op_any('||', variant_col, '\xBB'::BLOB) FROM test_op_any;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+\xAA\xBB
+NULL
+
+query I
+SELECT binary_op_any('||', variant_col, [2, 3, 4]) FROM test_op_any;
+----
+2[2, 3, 4]
+2022-01-02[2, 3, 4]
+1 day[2, 3, 4]
+abc[2, 3, 4]
+[1, 2, 3, 2, 3, 4]
+NULL
+3.000000000[2, 3, 4]
+
+# Bitwise or (|) operator for any type
+query I
+SELECT binary_op_any('|', variant_col, 3) FROM test_op_any;
+----
+3
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query I
+SELECT binary_op_any('|', variant_col, '\xBB'::BLOB) FROM test_op_any;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+\xBB
+NULL
+
+# Bitwise and (&) operator for any type
+query I
+SELECT binary_op_any('&', variant_col, 3) FROM test_op_any;
+----
+2
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query I
+SELECT binary_op_any('&', variant_col, '\xBB'::BLOB) FROM test_op_any;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+\xAA
+NULL
+
+# Bitwise xor (^) operator for any type
+query I
+SELECT binary_op_any('^', variant_col, 3) FROM test_op_any;
+----
+1
+NULL
+NULL
+NULL
+NULL
+NULL
+NULL
+
+query I
+SELECT binary_op_any('^', variant_col, '\xBB'::BLOB) FROM test_op_any;
+----
+NULL
+NULL
+NULL
+NULL
+NULL
+\x11
+NULL
+
+# Bitwise shift left (<<) operator for any type
+query I
+SELECT binary_op_any('<<', variant_col, 2) FROM test_op_any;
+----
+8
+NULL
+NULL
+NULL
+NULL
+\xA8
+NULL
+
+# Bitwise shift right (>>) operator for any type
+query I
+SELECT binary_op_any('>>', variant_col, 1) FROM test_op_any;
+----
+1
+NULL
+NULL
+NULL
+NULL
+U
+NULL
+
+# Negative (-) operator for any type
+query I
+SELECT unary_op_any('-', variant_col) FROM test_op_any;
+----
+-2
+NULL
+-1 days
+NULL
+NULL
+NULL
+-3.000000000
+
+# Bitwise negative (~) operator for any type
+query I
+SELECT unary_op_any('~', variant_col) FROM test_op_any;
+----
+-3
+NULL
+NULL
+NULL
+NULL
+U 
+NULL

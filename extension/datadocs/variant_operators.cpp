@@ -293,7 +293,7 @@ static Value ExecuteBinaryAnyOperatorInteger(PhysicalType type, Value left_val, 
 		break;
 	case PhysicalType::INT128:
 		res = Value::CreateValue<hugeint_t>(OP::template Operation<hugeint_t, hugeint_t, hugeint_t>(
-		    left_val.GetValue<hugeint_t>(), right_val.GetValue<hugeint_t>()));
+		    left_val.GetValueUnsafe<hugeint_t>(), right_val.GetValueUnsafe<hugeint_t>()));
 		break;
 	default:
 		throw NotImplementedException("Unimplemented type for ExecuteBinaryAnyOperatorIngeter");
@@ -314,10 +314,12 @@ template <class OP>
 static Value ExecuteBinaryAnyOperator(PhysicalType type, Value left_val, Value right_val) {
 	Value res;
 	switch (type) {
-	case PhysicalType::INT128:
+	case PhysicalType::INT128: {
+		auto right_int = right_val.GetValueUnsafe<hugeint_t>();
+		auto left_int = left_val.GetValueUnsafe<hugeint_t>();
 		res = Value::CreateValue<hugeint_t>(OP::template Operation<hugeint_t, hugeint_t, hugeint_t>(
-		    left_val.GetValue<hugeint_t>(), right_val.GetValue<hugeint_t>()));
-		break;
+		    left_val.GetValueUnsafe<hugeint_t>(), right_val.GetValueUnsafe<hugeint_t>()));
+	} break;
 	case PhysicalType::FLOAT:
 		res = Value::CreateValue<float>(
 		    OP::template Operation<float, float, float>(left_val.GetValue<float>(), right_val.GetValue<float>()));
@@ -370,7 +372,8 @@ static Value ExecuteUnaryAnyOperatorInteger(PhysicalType type, Value val) {
 		res = Value::CreateValue<uint64_t>(OP::template Operation<uint64_t, uint64_t>(val.GetValue<uint64_t>()));
 		break;
 	case PhysicalType::INT128:
-		res = Value::CreateValue<hugeint_t>(OP::template Operation<hugeint_t, hugeint_t>(val.GetValue<hugeint_t>()));
+		res = Value::CreateValue<hugeint_t>(
+		    OP::template Operation<hugeint_t, hugeint_t>(val.GetValueUnsafe<hugeint_t>()));
 		break;
 	default:
 		throw NotImplementedException("Unimplemented type for ExecuteUnaryAnyOperatorInteger");
@@ -430,27 +433,22 @@ static Value AddSubtractNumericOperator(Value left_val, Value right_val, bool is
 
 	if (left_type.IsNumeric() && left_type.id() == right_type.id()) {
 		if (left_type.id() == LogicalTypeId::DECIMAL) {
-			res = is_add_op
-			          ? ExecuteBinaryAnyOperator<DecimalAddOverflowCheck>(left_type.InternalType(), left_val, right_val)
-			          : ExecuteBinaryAnyOperator<DecimalSubtractOverflowCheck>(left_type.InternalType(), left_val,
-			                                                                   right_val);
-			hugeint_t result;
-			string *error_message = nullptr;
+			res = is_add_op ? ExecuteBinaryAnyOperator<DecimalAddOverflowCheck>(left_type.InternalType(), new_left_val,
+			                                                                    new_right_val)
+			                : ExecuteBinaryAnyOperator<DecimalSubtractOverflowCheck>(left_type.InternalType(),
+			                                                                         new_left_val, new_right_val);
 			DecimalTypeInfo info = left_type.AuxInfo()->Cast<DecimalTypeInfo>();
-			if (!TryCastToDecimal::Operation(res.GetValue<hugeint_t>(), result, error_message, info.width,
-			                                 info.scale)) {
-				throw Exception("Cast to Decimal fail");
-				return nullptr;
-			}
-			res = Value::DECIMAL(result, info.width, info.scale);
+			res = Value::DECIMAL(res.GetValue<hugeint_t>(), info.width, info.scale);
 		} else if (left_type.IsIntegral() && left_type.id() != LogicalTypeId::HUGEINT) {
 			res = is_add_op ? ExecuteBinaryAnyOperatorInteger<AddOperatorOverflowCheck>(left_type.InternalType(),
-			                                                                            left_val, right_val)
-			                : ExecuteBinaryAnyOperatorInteger<SubtractOperatorOverflowCheck>(left_type.InternalType(),
-			                                                                                 left_val, right_val);
+			                                                                            new_left_val, new_right_val)
+			                : ExecuteBinaryAnyOperatorInteger<SubtractOperatorOverflowCheck>(
+			                      left_type.InternalType(), new_left_val, new_right_val);
 		} else {
-			res = is_add_op ? ExecuteBinaryAnyOperator<AddOperator>(left_type.InternalType(), left_val, right_val)
-			                : ExecuteBinaryAnyOperator<SubtractOperator>(left_type.InternalType(), left_val, right_val);
+			res =
+			    is_add_op
+			        ? ExecuteBinaryAnyOperator<AddOperator>(left_type.InternalType(), new_left_val, new_right_val)
+			        : ExecuteBinaryAnyOperator<SubtractOperator>(left_type.InternalType(), new_left_val, new_right_val);
 		}
 	}
 
@@ -894,15 +892,8 @@ static void HandleUnaryOpAny(Vector &result, idx_t index, OperatorType op, Value
 			    NegateAnyOperator::Operation<interval_t, interval_t>(val.GetValue<interval_t>()));
 		} else if (value_type.id() == LogicalTypeId::DECIMAL) {
 			res_val = ExecuteUnaryAnyOperatorNumeric<NegateAnyOperator>(value_type.InternalType(), val);
-			hugeint_t result;
-			string *error_message = nullptr;
 			DecimalTypeInfo info = value_type.AuxInfo()->Cast<DecimalTypeInfo>();
-			if (!TryCastToDecimal::Operation(res_val.GetValue<hugeint_t>(), result, error_message, info.width,
-			                                 info.scale)) {
-				throw Exception("Cast to Decimal fail");
-			} else {
-				res_val = Value::DECIMAL(result, info.width, info.scale);
-			}
+			res_val = Value::DECIMAL(res_val.GetValue<hugeint_t>(), info.width, info.scale);
 		} else if (value_type.IsNumeric()) {
 			res_val = ExecuteUnaryAnyOperatorNumeric<NegateAnyOperator>(value_type.InternalType(), val);
 		}

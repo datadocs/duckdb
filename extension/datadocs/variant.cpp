@@ -1352,13 +1352,7 @@ template <typename T>
 bool VariantWriteDecimalValue(VectorWriter &result, Value v) {
 	LogicalType type = v.type();
 	VariantWriter variant_writer(type);
-	T raw_val;
-	string *error_message = nullptr;
-	DecimalTypeInfo info = type.AuxInfo()->Cast<DecimalTypeInfo>();
-	if (!TryCastToDecimal::Operation(v.GetValue<T>(), raw_val, error_message, info.width, info.scale)) {
-		throw Exception("Cast to Decimal fail");
-		return false;
-	}
+	T raw_val = v.GetValueUnsafe<T>();
 	return variant_writer.Process(result, VectorHolder(raw_val)[0]);
 }
 
