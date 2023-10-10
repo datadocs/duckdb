@@ -511,13 +511,13 @@ struct CompareAny {
 
 /**
  * @brief Executor for compare any between two vector with same type
- * 
- * @tparam T 
- * @tparam OP 
- * @param left 
- * @param right 
- * @param result 
- * @param count 
+ *
+ * @tparam T
+ * @tparam OP
+ * @param left
+ * @param right
+ * @param result
+ * @param count
  */
 template <class T, class OP>
 static inline void TemplatedCompareAnyExecute(Vector &left, Vector &right, Vector &result, idx_t count) {
@@ -555,11 +555,11 @@ static inline void TemplatedCompareAnyExecute(Vector &left, Vector &right, Vecto
 
 /**
  * @brief Compare any for two vector same type except decayable/nested types
- * 
- * @param left 
- * @param right 
- * @param result 
- * @param count 
+ *
+ * @param left
+ * @param right
+ * @param result
+ * @param count
  */
 static void CompareAnyBaseVectors(Vector &left, Vector &right, Vector &result, idx_t count) {
 	switch (left.GetType().InternalType()) {
@@ -610,25 +610,28 @@ static void CompareAnyBaseVectors(Vector &left, Vector &right, Vector &result, i
 
 /**
  * @brief compare any vector for each values for general type
- * 
- * @param left 
- * @param right 
- * @param result 
- * @param count 
- * @param ci 
- * @param keys_ci 
+ *
+ * @param left
+ * @param right
+ * @param result
+ * @param count
+ * @param ci
+ * @param keys_ci
  */
 static void CompareAnyVectorEachValue(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci) {
 	UnifiedVectorFormat vdata1, vdata2;
 	left.ToUnifiedFormat(count, vdata1);
 	right.ToUnifiedFormat(count, vdata2);
 	auto result_data = FlatVector::GetData<int>(result);
+	auto left_type = left.GetType();
+	auto right_type = right.GetType();
 	for (idx_t i = 0; i < count; i++) {
 		auto idx1 = vdata1.sel->get_index(i);
 		auto idx2 = vdata2.sel->get_index(i);
 		bool v1_valid = vdata1.validity.RowIsValid(idx1);
 		bool v2_valid = vdata2.validity.RowIsValid(idx2);
-		if (v1_valid && v2_valid) {
+		if ((v1_valid && v2_valid) || (v1_valid && IsDecayableType(left_type)) ||
+		    (v2_valid && IsDecayableType(right_type))) {
 			result_data[i] = CompareAnyValue(left.GetValue(idx1), right.GetValue(idx2), ci, keys_ci);
 		} else if (!v1_valid && !v2_valid) {
 			result_data[i] = COMPARISON_RS_EQUAL;
@@ -640,11 +643,11 @@ static void CompareAnyVectorEachValue(Vector &left, Vector &right, Vector &resul
 
 /**
  * @brief Compare types between two logical type in case not same types and can't cast
- * 
- * @param left 
- * @param right 
- * @param result 
- * @param count 
+ *
+ * @param left
+ * @param right
+ * @param result
+ * @param count
  */
 static void CompareAnyVectorsType(Vector &left, Vector &right, Vector &result, idx_t count) {
 	auto type1 = left.GetType();
@@ -677,13 +680,13 @@ static void CompareAnyVectorsType(Vector &left, Vector &right, Vector &result, i
  * 		- both struct:
  * 				+ sorting keys of each value
  * 				+ compare each pair of key and value
- * 
- * @param left 
- * @param right 
- * @param result 
- * @param count 
- * @param ci 
- * @param keys_ci 
+ *
+ * @param left
+ * @param right
+ * @param result
+ * @param count
+ * @param ci
+ * @param keys_ci
  */
 static void CompareAnyNestedVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci) {
 	auto type1 = left.GetType();
@@ -775,17 +778,17 @@ static void CompareAnyNestedVectors(Vector &left, Vector &right, Vector &result,
  * - one of two vector type is decayable type: call compare value functions
  * - both nested types: call compare nested vectors function
  * - check type of two vectors
- * 		+ Same types or can cast between two types: 
+ * 		+ Same types or can cast between two types:
  * 			1. same type: call compare any function for base vectors
  * 			2. cast: call compare value function
  * 		+ others: call compare types function
- * 
- * @param left 
- * @param right 
- * @param result 
- * @param count 
- * @param ci 
- * @param keys_ci 
+ *
+ * @param left
+ * @param right
+ * @param result
+ * @param count
+ * @param ci
+ * @param keys_ci
  */
 static void CompareAnyVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci) {
 	auto type1 = left.GetType();
@@ -816,10 +819,10 @@ static void CompareAnyVectors(Vector &left, Vector &right, Vector &result, idx_t
 
 /**
  * @brief main body of compare any function
- * 
- * @param args 
- * @param state 
- * @param result 
+ *
+ * @param args
+ * @param state
+ * @param result
  */
 static void CompareAnyFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(result.GetType() == LogicalType::INTEGER);
@@ -858,13 +861,13 @@ static void CompareAnyFunction(DataChunk &args, ExpressionState &state, Vector &
 
 /**
  * @brief check value in list of value or not
- * 
- * @param left 
- * @param right 
- * @param result 
- * @param count 
- * @param ci 
- * @param keys_ci 
+ *
+ * @param left
+ * @param right
+ * @param result
+ * @param count
+ * @param ci
+ * @param keys_ci
  */
 static void AnyInArrayVectorEachValue(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci) {
 	UnifiedVectorFormat vdata1, vdata2;
@@ -899,11 +902,11 @@ static void AnyInArrayVectorEachValue(Vector &left, Vector &right, Vector &resul
  * @brief Check value in list of value in cast not same type and can't cast
  * true: value is null and list have null value element
  * false: other
- * 
- * @param value_vector 
- * @param list 
- * @param result 
- * @param count 
+ *
+ * @param value_vector
+ * @param list
+ * @param result
+ * @param count
  */
 static void AnyInArrayVectorsNotEqualType(Vector &value_vector, Vector &list, Vector &result, idx_t count) {
 	auto result_data = FlatVector::GetData<bool>(result);
@@ -952,13 +955,13 @@ static void AnyInArrayVectorsNotEqualType(Vector &value_vector, Vector &list, Ve
  * @brief executor for any in array for base vectors (same types)
  * true: (value in list of values) or (null and null in list of value)
  * false: other
- * 
- * @tparam T 
- * @tparam OP 
- * @param value_vector 
- * @param list 
- * @param result 
- * @param count 
+ *
+ * @tparam T
+ * @tparam OP
+ * @param value_vector
+ * @param list
+ * @param result
+ * @param count
  */
 template <class T, class OP>
 static inline void TemplatedAnyInArrayExecute(Vector &value_vector, Vector &list, Vector &result, idx_t count) {
@@ -1020,11 +1023,11 @@ static inline void TemplatedAnyInArrayExecute(Vector &value_vector, Vector &list
 
 /**
  * @brief Any in array for two vectors in case same types
- * 
- * @param value_vector 
- * @param list 
- * @param result 
- * @param count 
+ *
+ * @param value_vector
+ * @param list
+ * @param result
+ * @param count
  */
 static void AnyInArrayBaseVectors(Vector &value_vector, Vector &list, Vector &result, idx_t count) {
 	switch (value_vector.GetType().InternalType()) {
@@ -1081,13 +1084,13 @@ static void AnyInArrayBaseVectors(Vector &value_vector, Vector &list, Vector &re
  * - type1 and child of type2 is same type: call function for same type
  * - can cast between two type: call function for each value
  * - can't cast: call function to compare two types
- * 
- * @param left 
- * @param right 
- * @param result 
- * @param count 
- * @param ci 
- * @param keys_ci 
+ *
+ * @param left
+ * @param right
+ * @param result
+ * @param count
+ * @param ci
+ * @param keys_ci
  */
 static void AnyInArrayVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci) {
 	auto type1 = left.GetType();
@@ -1120,10 +1123,10 @@ static void AnyInArrayVectors(Vector &left, Vector &right, Vector &result, idx_t
 
 /**
  * @brief Any in array body for adding to catalog
- * 
- * @param args 
- * @param state 
- * @param result 
+ *
+ * @param args
+ * @param state
+ * @param result
  */
 static void AnyInArrayFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(result.GetType() == LogicalType::BOOLEAN);
@@ -1170,13 +1173,13 @@ static void AnyInArrayFunction(DataChunk &args, ExpressionState &state, Vector &
 /**
  * @brief Create a Bound Ref Expression object
  * For argument of list_transform function
- * 
- * @param alias 
- * @param rtype 
- * @param binding 
- * @param lambda_index 
- * @param depth 
- * @return unique_ptr<Expression> 
+ *
+ * @param alias
+ * @param rtype
+ * @param binding
+ * @param lambda_index
+ * @param depth
+ * @return unique_ptr<Expression>
  */
 unique_ptr<Expression> CreateBoundRefExpression(string alias, LogicalType rtype, ColumnBinding binding,
                                                 idx_t lambda_index, idx_t depth = 0) {
@@ -1186,10 +1189,10 @@ unique_ptr<Expression> CreateBoundRefExpression(string alias, LogicalType rtype,
 /**
  * @brief Create a Bound To Lower object
  * create expression for `lower` function: convert string to lowercase
- * 
- * @param context 
- * @param expr 
- * @return unique_ptr<Expression> 
+ *
+ * @param context
+ * @param expr
+ * @return unique_ptr<Expression>
  */
 unique_ptr<Expression> CreateBoundToLower(ClientContext &context, unique_ptr<Expression> expr) {
 	vector<unique_ptr<Expression>> arguments;
@@ -1204,9 +1207,9 @@ unique_ptr<Expression> CreateBoundToLower(ClientContext &context, unique_ptr<Exp
 /**
  * @brief Create a Lambda To Lower object
  * Create lambda function expression for list_transform function `x -> lower(x)`
- * 
- * @param context 
- * @return unique_ptr<Expression> 
+ *
+ * @param context
+ * @return unique_ptr<Expression>
  */
 unique_ptr<Expression> CreateLambdaToLower(ClientContext &context) {
 	auto bound_ref =
@@ -1221,10 +1224,10 @@ unique_ptr<Expression> CreateLambdaToLower(ClientContext &context) {
  * covert list of string to lowercase
  * list_transform(str, x -> lower(x))
  * ['Hello', 'temP'] -> ['hello', 'temp']
- * 
- * @param context 
- * @param expr 
- * @return unique_ptr<Expression> 
+ *
+ * @param context
+ * @param expr
+ * @return unique_ptr<Expression>
  */
 unique_ptr<Expression> CreateListTransformToLower(ClientContext &context, unique_ptr<Expression> expr) {
 	auto return_type = expr->return_type;
@@ -1241,12 +1244,12 @@ unique_ptr<Expression> CreateListTransformToLower(ClientContext &context, unique
 
 /**
  * @brief Bind function for `compare_any` and `any_in_array` function
- * 
- * @param context 
- * @param arguments 
- * @param is_compare_any 
- * @return true 
- * @return false 
+ *
+ * @param context
+ * @param arguments
+ * @param is_compare_any
+ * @return true
+ * @return false
  */
 static bool ComparisonBind(ClientContext &context, vector<unique_ptr<Expression>> &arguments, bool is_compare_any) {
 	// collect names and deconflict, construct return type
@@ -1324,11 +1327,11 @@ static bool ComparisonBind(ClientContext &context, vector<unique_ptr<Expression>
 /**
  * @brief Bind function for `compare_any` function
  * add cast expression for two operand if can cast between two type
- * 
- * @param context 
- * @param bound_function 
- * @param arguments 
- * @return unique_ptr<FunctionData> 
+ *
+ * @param context
+ * @param bound_function
+ * @param arguments
+ * @return unique_ptr<FunctionData>
  */
 static unique_ptr<FunctionData> CompareAnyBind(ClientContext &context, ScalarFunction &bound_function,
                                                vector<unique_ptr<Expression>> &arguments) {
@@ -1353,11 +1356,11 @@ static unique_ptr<FunctionData> CompareAnyBind(ClientContext &context, ScalarFun
 /**
  * @brief Bind function for `any_in_array` function
  * add cast expression if type 1 and sub type of type 2 can be cast between them
- * 
- * @param context 
- * @param bound_function 
- * @param arguments 
- * @return unique_ptr<FunctionData> 
+ *
+ * @param context
+ * @param bound_function
+ * @param arguments
+ * @return unique_ptr<FunctionData>
  */
 static unique_ptr<FunctionData> AnyInArrayBind(ClientContext &context, ScalarFunction &bound_function,
                                                vector<unique_ptr<Expression>> &arguments) {
