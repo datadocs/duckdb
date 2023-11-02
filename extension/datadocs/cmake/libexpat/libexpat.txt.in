@@ -6,15 +6,19 @@
 # target_include_directories(<your_target> PRIVATE $<TARGET_PROPERTY:expat,INTERFACE_INCLUDE_DIRECTORIES>)
 # target_link_libraries(<your_target> PUBLIC expat)
 
-cmake_minimum_required(VERSION 2.8.2)
+cmake_minimum_required(VERSION 3.6)
 
 project(libexpat-download)
 
 include(ExternalProject)
 ExternalProject_Add(libexpat-download
-  GIT_REPOSITORY    https://github.com/libexpat/libexpat.git
-  GIT_TAG           R_2_2_9
-  SOURCE_DIR        "${CMAKE_CURRENT_BINARY_DIR}/libexpat"
+  # GIT_REPOSITORY    https://github.com/libexpat/libexpat.git
+  # GIT_TAG           R_2_2_9
+  # GIT_SHALLOW       true
+  URL               "https://github.com/libexpat/libexpat/releases/download/R_2_2_10/expat-2.2.10.tar.gz"
+  URL_HASH          SHA256=bf42d1f52371d23684de36cc6d2f0f1acd02de264d1105bdc17792bbeb7e7ceb
+  SOURCE_DIR        "${CMAKE_CURRENT_BINARY_DIR}/libexpat/expat"
+  DOWNLOAD_DIR      "${CMAKE_CURRENT_BINARY_DIR}/libexpat-download"
   BINARY_DIR        "${CMAKE_CURRENT_BINARY_DIR}/libexpat-build"
   CONFIGURE_COMMAND ""
   BUILD_COMMAND     ""
