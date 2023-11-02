@@ -5,7 +5,7 @@
 # fetch_dependency(boost "cmake/boost/boost.txt.in")
 # target_include_directories(<your_target> PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/boost)
 
-cmake_minimum_required(VERSION 2.8.2)
+cmake_minimum_required(VERSION 3.6)
 
 project(boost-headers-download NONE)
 
@@ -13,6 +13,9 @@ include(ExternalProject)
 ExternalProject_Add(boost-headers-download
   GIT_REPOSITORY    https://github.com/panda-34/libboost-includes.git
   GIT_TAG           master
+  GIT_SHALLOW       true 
+  # GIT_SHALLOW <bool> New in version 3.6.
+  # It enable the option `--depth 1` for git clone to reducing building time and disk usage.
   SOURCE_DIR        "${CMAKE_CURRENT_BINARY_DIR}/boost/boost"
   BINARY_DIR        "${CMAKE_CURRENT_BINARY_DIR}/boost-build"
   CONFIGURE_COMMAND ""
