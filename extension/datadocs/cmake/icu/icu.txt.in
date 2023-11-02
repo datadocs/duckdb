@@ -6,15 +6,22 @@
 # target_include_directories(<your_target> PRIVATE $<TARGET_PROPERTY:icu,INTERFACE_INCLUDE_DIRECTORIES>)
 # target_link_libraries(<your_target> PUBLIC icu)
 
-cmake_minimum_required(VERSION 2.8.2)
+cmake_minimum_required(VERSION 3.6)
 
 project(icu-download)
 
 include(ExternalProject)
 ExternalProject_Add(icu-download
-  GIT_REPOSITORY    https://github.com/unicode-org/icu.git
-  GIT_TAG           release-64-2
-  SOURCE_DIR        "${CMAKE_CURRENT_BINARY_DIR}/icu"
+  # GIT_REPOSITORY    https://github.com/unicode-org/icu.git
+  # GIT_TAG           release-64-2
+  # GIT_SHALLOW       true 
+  # GIT_SHALLOW <bool> New in version 3.6.
+  # It enable the option `--depth 1` for git clone to reducing building time and disk usage.
+  # https://github.com/unicode-org/icu/releases?q=64.2&expanded=true
+  URL               "https://github.com/unicode-org/icu/releases/download/release-64-2/icu4c-64_2-src.tgz"
+  URL_HASH          SHA256=627d5d8478e6d96fc8c90fed4851239079a561a6a8b9e48b0892f24e82d31d6c
+  SOURCE_DIR        "${CMAKE_CURRENT_BINARY_DIR}/icu/icu4c"
+  DOWNLOAD_DIR      "${CMAKE_CURRENT_BINARY_DIR}/icu-download"
   BINARY_DIR        "${CMAKE_CURRENT_BINARY_DIR}/icu-build"
   CONFIGURE_COMMAND ""
   BUILD_COMMAND     ""

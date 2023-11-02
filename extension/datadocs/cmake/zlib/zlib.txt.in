@@ -6,7 +6,7 @@
 # target_include_directories(<your_target> PRIVATE $<TARGET_PROPERTY:zlib,INTERFACE_INCLUDE_DIRECTORIES>)
 # target_link_libraries(<your_target> PUBLIC zlib)
 
-cmake_minimum_required(VERSION 2.8.2)
+cmake_minimum_required(VERSION 3.6)
 
 project(zlib-download)
 
@@ -14,6 +14,7 @@ include(ExternalProject)
 ExternalProject_Add(zlib-download
   GIT_REPOSITORY    https://github.com/madler/zlib.git
   GIT_TAG           v1.2.11
+  GIT_SHALLOW       true
   SOURCE_DIR        "${CMAKE_CURRENT_BINARY_DIR}/zlib"
   BINARY_DIR        "${CMAKE_CURRENT_BINARY_DIR}/zlib-build"
   CONFIGURE_COMMAND ""

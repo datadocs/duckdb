@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.6)
 
 project(DatadocsExtension)
 
@@ -53,7 +53,12 @@ fetch_dependency(expat "cmake/libexpat/libexpat.txt.in")
 include(cmake/libexpat/libexpat.cmake.txt)
 
 # Boost
-fetch_dependency(boost "cmake/boost/boost.txt.in")
+find_package(Boost 1.76.0...<2.0)
+if(Boost_FOUND)
+  message(NOTICE "Boost system-wide '${Boost_INCLUDE_DIRS}' will be used")
+else()
+  fetch_dependency(boost "cmake/boost/boost.txt.in")
+endif()
 
 ##########################
 # simple_icu_init library
@@ -107,18 +112,33 @@ set(DATADOCS_EXTENSION_FILES
 
 add_library(datadocs_extension STATIC ${DATADOCS_EXTENSION_FILES})
 
+# RapidJSON
+# The config logic in this if statement is used to build DuckDB with this extension 
+#   in a standalone directory. (In another words, without DuckDB WASM)
+if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/../../../rapidjson/include")
+  message(WARNING "CMake will download RapidJSON from the internet by the config file: contrib/rapidjson/CMakeLists.txt")
+  include(contrib/rapidjson/CMakeLists.txt)
+  add_dependencies(datadocs_extension rapidjson)
+endif()
+
 target_include_directories(datadocs_extension
 	PRIVATE include
 	PRIVATE geo/include
 	PRIVATE ../json/include
 	PRIVATE ../json/yyjson/include
   PRIVATE ../../../rapidjson/include
+  PRIVATE ${CMAKE_BINARY_DIR}/include
 	# Boost includes
 	PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/boost
 	# libexpat includes
 	PRIVATE $<TARGET_PROPERTY:expat,INTERFACE_INCLUDE_DIRECTORIES>
 	# Privately includes icu
 	PRIVATE $<TARGET_PROPERTY:icu,INTERFACE_INCLUDE_DIRECTORIES>)
+
+# Boost system wide includes (OPTIONAL)
+if(Boost_FOUND AND DEFINED Boost_INCLUDE_DIRS)
+  target_include_directories(datadocs_extension PRIVATE ${Boost_INCLUDE_DIRS})
+endif()
 
 target_link_libraries(datadocs_extension
         PRIVATE zlib
