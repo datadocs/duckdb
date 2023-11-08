@@ -63,18 +63,6 @@ static int COMPARISON_RS_LESS = -1;
 static int COMPARISON_RS_BIGGER = 1;
 
 /**
- * @brief convert string to lowercase for case optional argument `ci`=true
- *
- * @param str
- * @return string
- */
-static string ToLowerCase(string str) {
-	string result = str;
-	std::transform(str.begin(), str.end(), result.begin(), [](unsigned char c) { return std::tolower(c); });
-	return result;
-}
-
-/**
  * @brief Function bind information for list_transform function in case `ci` is true
  * create expression covert list of string to lowercase
  * reference src/core_functions/scalar/list_functions.cpp
