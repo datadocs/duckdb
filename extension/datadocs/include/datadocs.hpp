@@ -18,6 +18,7 @@ extern const LogicalType DDVariantType;
 extern const LogicalType DDVariantArrayType;
 
 extern bool IsDatetime(LogicalType type);
+extern string ToLowerCase(string str);
 extern bool IsDecayableType(LogicalType type);
 extern Value GetDecayVariantValue(Value v, yyjson_alc *alc);
 extern Value GetDecayJsonValue(Value v, yyjson_alc *alc);
