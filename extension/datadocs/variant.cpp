@@ -15,6 +15,7 @@
 #include "duckdb/function/scalar/string_functions.hpp"
 #include "duckdb/main/extension_util.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "fmt/format.h"
 #include "geometry.hpp"
 #include "json_common.hpp"
@@ -98,7 +99,7 @@ static bool TransformVariantObjectInternal(yyjson_val *objects[], yyjson_alc *al
                                            JSONTransformOptions &options, vector<LogicalType> infos,
                                            CastParameters &parameters, vector<yyjson_val *> extra_infos);
 static bool SortHashFunc(std::string &result, LogicalType type, yyjson_val *val, yyjson_val *info, bool ci,
-                         bool nested_cast, JSONAllocator &alc);
+                         bool keys_ci, bool nested_cast, JSONAllocator &alc);
 
 LogicalType ConvertLogicalTypeFromString(std::string type) {
 	if (type == "STRING") {
@@ -2628,7 +2629,8 @@ static string VariantSortHashInt(const string &arg) {
 	return res;
 }
 
-static string VariantSortHashList(yyjson_val *root, yyjson_val *info, LogicalType type, bool ci, JSONAllocator &alc) {
+static string VariantSortHashList(yyjson_val *root, yyjson_val *info, LogicalType type, bool ci, bool keys_ci,
+                                  JSONAllocator &alc) {
 	string res;
 	yyjson_arr_iter iter;
 	if (!yyjson_arr_iter_init(root, &iter)) {
@@ -2658,7 +2660,7 @@ static string VariantSortHashList(yyjson_val *root, yyjson_val *info, LogicalTyp
 		if (info_val && !yyjson_is_null(info_val)) {
 			new_child_type = ConvertLogicalTypeFromJson(info_val);
 		}
-		auto child_res = SortHashFunc(child_result, new_child_type, val, info_val, ci, false, alc);
+		auto child_res = SortHashFunc(child_result, new_child_type, val, info_val, ci, keys_ci, false, alc);
 		if (child_res) {
 			res += child_result;
 		} else {
@@ -2677,7 +2679,8 @@ static string VariantSortHashList(yyjson_val *root, yyjson_val *info, LogicalTyp
 	return res;
 }
 
-static string VariantSortHashStruct(yyjson_val *root, yyjson_val *info, LogicalType type, bool ci, JSONAllocator &alc) {
+static string VariantSortHashStruct(yyjson_val *root, yyjson_val *info, LogicalType type, bool ci, bool keys_ci,
+                                    JSONAllocator &alc) {
 	string res;
 	if (!root || unsafe_yyjson_is_null(root) || !yyjson_is_obj(root)) {
 		return res;
@@ -2691,13 +2694,15 @@ static string VariantSortHashStruct(yyjson_val *root, yyjson_val *info, LogicalT
 	auto child_types = StructType::GetChildTypes(type);
 	map<string, string> orginal_key_map {};
 	for (auto &[child_key, child_type] : child_types) {
-		orginal_key_map.insert(std::pair<string, string>(ToLowerCase(child_key), child_key));
+		orginal_key_map.insert(std::pair<string, string>(keys_ci ? ToLowerCase(child_key) : child_key, child_key));
 	}
 	// Transform to lowercase first
-	std::transform(child_types.begin(), child_types.end(), child_types.begin(),
-	               [](std::pair<string, LogicalType> item) {
-		               return std::pair<string, LogicalType>(ToLowerCase(item.first), item.second);
-	               });
+	if (keys_ci) {
+		std::transform(child_types.begin(), child_types.end(), child_types.begin(),
+		               [](std::pair<string, LogicalType> item) {
+			               return std::pair<string, LogicalType>(ToLowerCase(item.first), item.second);
+		               });
+	}
 	// Sort by key
 	std::sort(child_types.begin(), child_types.end(),
 	          [](std::pair<string, LogicalType> const &a, std::pair<string, LogicalType> const &b) {
@@ -2718,7 +2723,7 @@ static string VariantSortHashStruct(yyjson_val *root, yyjson_val *info, LogicalT
 		std::string child_result;
 		auto child_res =
 		    SortHashFunc(child_result, new_child_type, yyjson_obj_getn(root, original_key.data(), original_key.size()),
-		                 child_info, ci, false, alc);
+		                 child_info, ci, keys_ci, false, alc);
 		if (child_res) {
 			res += "\"" + child_key + "\": " + child_result;
 		}
@@ -2738,9 +2743,10 @@ static string VariantSortHashStruct(yyjson_val *root, yyjson_val *info, LogicalT
 	return res;
 }
 
-static string VariantSortHashJson(yyjson_val *root, yyjson_val *info, LogicalType type, bool ci, JSONAllocator &alc) {
+static string VariantSortHashJson(yyjson_val *root, yyjson_val *info, LogicalType type, bool ci, bool keys_ci,
+                                  JSONAllocator &alc) {
 	if (yyjson_is_arr(root)) {
-		return VariantSortHashList(root, info, LogicalType::LIST(DDJsonType), ci, alc);
+		return VariantSortHashList(root, info, LogicalType::LIST(DDJsonType), ci, keys_ci, alc);
 	} else if (yyjson_is_obj(root)) {
 		child_list_t<LogicalType> child_types;
 		size_t idx, max;
@@ -2750,21 +2756,21 @@ static string VariantSortHashJson(yyjson_val *root, yyjson_val *info, LogicalTyp
 			LogicalType child = DDJsonType;
 			child_types.push_back({kstr, child});
 		}
-		return VariantSortHashStruct(root, info, LogicalType::STRUCT(child_types), ci, alc);
+		return VariantSortHashStruct(root, info, LogicalType::STRUCT(child_types), ci, keys_ci, alc);
 	}
 	std::string child_result;
-	auto res = SortHashFunc(child_result, DDJsonType, root, info, ci, false, alc);
+	auto res = SortHashFunc(child_result, DDJsonType, root, info, ci, keys_ci, false, alc);
 	return child_result;
 }
 
-static string VariantSortHashVariant(yyjson_val *root, yyjson_val *info, LogicalType type, bool ci,
+static string VariantSortHashVariant(yyjson_val *root, yyjson_val *info, LogicalType type, bool ci, bool keys_ci,
                                      JSONAllocator &alc) {
 	std::string res;
-	return VariantSortHashJson(root, info, DDJsonType, ci, alc);
+	return VariantSortHashJson(root, info, DDJsonType, ci, keys_ci, alc);
 }
 
 static bool SortHashFunc(std::string &result, LogicalType type, yyjson_val *val, yyjson_val *info, bool ci,
-                         bool nested_cast, JSONAllocator &alc) {
+                         bool keys_ci, bool nested_cast, JSONAllocator &alc) {
 	bool is_json = type == DDJsonType;
 	auto js_tp = unsafe_yyjson_get_type(val);
 	auto js_tag = unsafe_yyjson_get_tag(val);
@@ -2809,7 +2815,7 @@ static bool SortHashFunc(std::string &result, LogicalType type, yyjson_val *val,
 		result = VariantSortHashReal(unsafe_yyjson_get_str(val));
 	} else if (type == LogicalType::VARCHAR || is_json && js_tp == YYJSON_TYPE_STR) {
 		result = string("3") + unsafe_yyjson_get_str(val);
-		if (!ci) {
+		if (ci) {
 			std::transform(result.begin(), result.end(), result.begin(),
 			               [](unsigned char c) { return std::tolower(c); });
 		}
@@ -2836,7 +2842,8 @@ static bool SortHashFunc(std::string &result, LogicalType type, yyjson_val *val,
 	} else if (type == LogicalType::TIME) {
 		result = string("5") + unsafe_yyjson_get_str(val);
 	} else if (type == LogicalType::DATE) {
-		result = string("6") + unsafe_yyjson_get_str(val) + "T00:00:00";
+		// result = string("6") + unsafe_yyjson_get_str(val) + "T00:00:00";
+		result = string("6") + unsafe_yyjson_get_str(val) + " 00:00:00";
 	} else if (type == LogicalType::TIMESTAMP) {
 		result = string("6") + unsafe_yyjson_get_str(val);
 	} else if (type == LogicalType::TIMESTAMP_TZ) {
@@ -2851,6 +2858,10 @@ static bool SortHashFunc(std::string &result, LogicalType type, yyjson_val *val,
 		result = duckdb_fmt::format("7{:019d}000", micros + 943488000000000000);
 	} else if (type == DDGeoType) {
 		result = string("8") + unsafe_yyjson_get_str(val);
+		if (ci) {
+			std::transform(result.begin(), result.end(), result.begin(),
+			               [](unsigned char c) { return std::tolower(c); });
+		}
 	} else {
 		if (nested_cast) {
 			auto res_doc = JSONCommon::CreateDocument(alc.GetYYAlc());
@@ -2858,8 +2869,8 @@ static bool SortHashFunc(std::string &result, LogicalType type, yyjson_val *val,
 			size_t len;
 			char *data = yyjson_mut_write_opts(res_doc, 0, alc.GetYYAlc(), &len, nullptr);
 			result = '9';
-			if (!ci && (type == LogicalType::LIST(LogicalType::VARCHAR) || type == LogicalType::LIST(DDJsonType) ||
-			            type.id() == LogicalTypeId::STRUCT)) {
+			if (ci && (type == LogicalType::LIST(LogicalType::VARCHAR) || type == LogicalType::LIST(DDJsonType) ||
+			           type.id() == LogicalTypeId::STRUCT)) {
 				std::transform(data, data + len, data, [](unsigned char c) { return std::tolower(c); });
 			}
 			result.append(data, len);
@@ -2867,13 +2878,13 @@ static bool SortHashFunc(std::string &result, LogicalType type, yyjson_val *val,
 			auto isList = type.id() == LogicalTypeId::LIST;
 			auto isStruct = type.id() == LogicalTypeId::STRUCT;
 			if (type == DDJsonType) {
-				result = VariantSortHashJson(val, info, type, ci, alc);
+				result = VariantSortHashJson(val, info, type, ci, keys_ci, alc);
 			} else if (type == DDVariantType) {
-				result = VariantSortHashVariant(val, info, type, ci, alc);
+				result = VariantSortHashVariant(val, info, type, ci, keys_ci, alc);
 			} else if (isList) {
-				result = VariantSortHashList(val, info, type, ci, alc);
+				result = VariantSortHashList(val, info, type, ci, keys_ci, alc);
 			} else if (isStruct) {
-				result = VariantSortHashStruct(val, info, type, ci, alc);
+				result = VariantSortHashStruct(val, info, type, ci, keys_ci, alc);
 			}
 		}
 	}
@@ -2892,14 +2903,16 @@ static bool VariantSortHashImpl(VectorWriter &writer, const VectorReader &arg, c
 	std::string_view tp = arg[0].GetString();
 	LogicalType type = ConvertLogicalTypeFromString(std::string(tp));
 	std::string result;
-	auto res = SortHashFunc(result, type, val, info_val, case_sensitive.Get<bool>(), true, alc);
+	auto res =
+	    SortHashFunc(result, type, val, info_val, !case_sensitive.Get<bool>(), !case_sensitive.Get<bool>(), true, alc);
 	if (res) {
 		writer.SetString(result);
 	}
 	return res;
 }
 
-static bool AnySortHashImpl(VectorWriter &writer, const VectorReader &arg) {
+static bool AnySortHashImpl(VectorWriter &writer, const VectorReader &arg, const VectorReader &ci_reader,
+                            const VectorReader &keys_ci_reader) {
 	JSONAllocator alc {Allocator::DefaultAllocator()};
 	auto doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
 	auto val = yyjson_doc_get_root(doc);
@@ -2918,8 +2931,16 @@ static bool AnySortHashImpl(VectorWriter &writer, const VectorReader &arg) {
 	} else {
 		type = ConvertLogicalTypeFromJson(info_val);
 	}
+	bool keys_ci = keys_ci_default_value;
+	if (!keys_ci_reader.IsNull()) {
+		keys_ci = keys_ci_reader.Get<bool>();
+	}
+	bool ci = ci_default_value;
+	if (!ci_reader.IsNull()) {
+		ci = ci_reader.Get<bool>();
+	}
 	std::string result;
-	auto res = SortHashFunc(result, type, val, info_val, true, false, alc);
+	auto res = SortHashFunc(result, type, val, info_val, ci, keys_ci, false, alc);
 	if (res) {
 		writer.SetString(result);
 	}
@@ -3099,6 +3120,58 @@ BoundCastInfo AnyToVariantArrayCastBind(BindCastInput &input, const LogicalType 
 	return BoundCastInfo(VariantCasts::AnyCastToVariantArray);
 }
 
+/**
+ * @brief Bind function for `sort_hash` function
+ *
+ * @param context
+ * @param bound_function
+ * @param arguments
+ * @return true
+ * @return false
+ */
+static unique_ptr<FunctionData> SortHashBind(ClientContext &context, ScalarFunction &bound_function,
+                                             vector<unique_ptr<Expression>> &arguments) {
+	// collect names and deconflict, construct return type
+	if (arguments.empty()) {
+		throw Exception("Can't sort hash nothing");
+		return nullptr;
+	}
+	if (arguments.size() < 1 || arguments.size() > 3) {
+		throw Exception("Can't sort hash for invalid value");
+		return nullptr;
+	}
+
+	// create argument maps from keys `ci` and `keys_ci`
+	map<ComparisonArgumentType, idx_t> arguments_maps;
+	for (idx_t i = 1; i < arguments.size(); i++) {
+		auto &child = arguments[i];
+		auto alias = child->alias;
+		if (alias == ci_str) {
+			arguments_maps.insert(std::pair<ComparisonArgumentType, idx_t>(ComparisonArgumentType::ci, i));
+		} else if (alias == keys_ci_str) {
+			arguments_maps.insert(std::pair<ComparisonArgumentType, idx_t>(ComparisonArgumentType::keys_ci, i));
+		} else {
+			throw Exception("Argument key is invalid key");
+			return nullptr;
+		}
+	}
+	vector<unique_ptr<Expression>> option_arguments(2);
+	for (idx_t i = 0; i < 2; i++) {
+		auto iter = arguments_maps.find(ComparisonArgumentType(i));
+		if (iter != arguments_maps.end()) {
+			option_arguments[i] = std::move(arguments[iter->second]);
+		} else {
+			option_arguments[i] = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+		}
+	}
+	arguments.resize(3);
+	for (idx_t i = 0; i < 2; i++) {
+		arguments[i + 1] = std::move(option_arguments[i]);
+	}
+
+	return nullptr;
+}
+
 static const std::vector<ScalarFunctionSet> GetVariantScalarFunctions() {
 	std::vector<ScalarFunctionSet> func_set {};
 
@@ -3215,8 +3288,10 @@ void DatadocsExtension::LoadVariant(DatabaseInstance &inst) {
 	ExtensionUtil::RegisterFunction(inst, ScalarFunction("variant_sort_hash", {DDVariantType, LogicalType::BOOLEAN},
 	                                                     LogicalType::VARCHAR, VariantSortHash));
 
-	ExtensionUtil::RegisterFunction(
-	    inst, ScalarFunction("any_sort_hash", {DDVariantType}, LogicalType::VARCHAR, AnySortHash));
+	ScalarFunction sort_hash_fun("sort_hash", {}, LogicalType::VARCHAR, AnySortHash, SortHashBind);
+	sort_hash_fun.varargs = LogicalType::ANY;
+	sort_hash_fun.null_handling = FunctionNullHandling::SPECIAL_HANDLING;
+	ExtensionUtil::RegisterFunction(inst, sort_hash_fun);
 
 	ExtensionUtil::RegisterFunction(
 	    inst, ScalarFunction("variant_from_sort_hash", {LogicalType::VARCHAR}, DDVariantType, VariantFromSortHash));
