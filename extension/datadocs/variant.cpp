@@ -15,6 +15,7 @@
 #include "duckdb/function/scalar/string_functions.hpp"
 #include "duckdb/main/extension_util.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "fmt/format.h"
 #include "geometry.hpp"
@@ -2895,8 +2896,11 @@ static bool VariantSortHashImpl(VectorWriter &writer, const VectorReader &arg, c
 	JSONAllocator alc {Allocator::DefaultAllocator()};
 	auto doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
 	auto val = yyjson_doc_get_root(doc);
-	auto info_doc = JSONCommon::ReadDocument(arg[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
-	auto info_val = yyjson_doc_get_root(info_doc);
+	yyjson_val *info_val = nullptr;
+	if (!arg[2].IsNull()) {
+		auto info_doc = JSONCommon::ReadDocument(arg[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+		info_val = yyjson_doc_get_root(info_doc);
+	}
 	if (!val || unsafe_yyjson_is_null(val)) {
 		return false;
 	}
@@ -3139,6 +3143,10 @@ static unique_ptr<FunctionData> SortHashBind(ClientContext &context, ScalarFunct
 	if (arguments.size() < 1 || arguments.size() > 3) {
 		throw Exception("Can't sort hash for invalid value");
 		return nullptr;
+	}
+
+	if (arguments[0]->return_type != DDVariantType) {
+		arguments[0] = BoundCastExpression::AddCastToType(context, std::move(arguments[0]), DDVariantType, false);
 	}
 
 	// create argument maps from keys `ci` and `keys_ci`
