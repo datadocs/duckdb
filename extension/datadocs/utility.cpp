@@ -6,6 +6,7 @@
 #include <limits>
 #include <regex>
 
+#include "duckdb/common/string_util.hpp"
 #include "utility.h"
 
 namespace duckdb {
@@ -14,16 +15,22 @@ void rtrim(std::string& s)
 {
 	size_t sz;
 	for (sz = s.size(); sz > 0; --sz)
-		if (!std::isspace((unsigned char)s[sz - 1]))
+		if (!StringUtil::CharacterIsSpace((unsigned char)s[sz - 1]))
 			break;
 	s.resize(sz);
+}
+
+void rtrim(std::string_view s)
+{
+	while (!s.empty() && StringUtil::CharacterIsSpace((unsigned char)s.back()))
+		s.remove_suffix(1);
 }
 
 void trim(std::string& s)
 {
 	rtrim(s);
 	size_t i = 0;
-	while (i < s.size() && std::isspace((unsigned char)s[i])) ++i;
+	while (i < s.size() && StringUtil::CharacterIsSpace((unsigned char)s[i])) ++i;
 	if (i > 0)
 		s.erase(0, i);
 }
@@ -148,9 +155,9 @@ bool strptime(const std::string& s_src, const std::string& s_fmt, double& dt)
 				break;
 			case 'J':
 				if (!read_number(src, 4, h)) return false;
-				if (std::isspace(*src))
+				if (StringUtil::CharacterIsSpace(*src))
 				{
-					while (std::isspace(*++src));
+					while (StringUtil::CharacterIsSpace(*++src));
 					int h2 = 0;
 					if (read_number(src, 2, h2))
 					{
@@ -213,7 +220,7 @@ bool strptime(const std::string& s_src, const std::string& s_fmt, double& dt)
 		case '\n':
 		case '\f':
 		case '\v':
-			while (std::isspace(*src))
+			while (StringUtil::CharacterIsSpace(*src))
 				++src;
 			break;
 		default:

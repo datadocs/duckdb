@@ -7,6 +7,8 @@
 #include <charconv>
 #include <regex>
 
+#include "duckdb/common/string_util.hpp"
+
 #include "inferrer.h"
 #include "wkt.h"
 #include "type_conv.h"
@@ -486,10 +488,10 @@ static const std::unordered_map<std::string, bool> variant_bool_dict {
 
 static bool string_to_variant_inner(const char* begin, const char* end, VariantCell& cell)
 {
-	while (std::isspace(*begin))
+	while (StringUtil::CharacterIsSpace(*begin))
 		if (++begin >= end)
 			return false;
-	while (std::isspace(end[-1])) --end;
+	while (StringUtil::CharacterIsSpace(end[-1])) --end;
 	if (string_to_variant_number(begin, end, cell))
 		return true;
 	size_t length = end - begin;

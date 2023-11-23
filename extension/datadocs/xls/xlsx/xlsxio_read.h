@@ -89,6 +89,7 @@ typedef unsigned __int64 uint64_t;
 #    define IOFN(fn) fn
 #  endif
 
+#define XML_STATIC
 #include <expat.h>
 
 #ifdef __cplusplus

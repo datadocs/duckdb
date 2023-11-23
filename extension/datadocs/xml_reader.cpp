@@ -1,3 +1,4 @@
+#define XML_STATIC
 #include <expat.h>
 
 #include "xml_reader.h"
