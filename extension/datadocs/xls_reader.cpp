@@ -18,7 +18,7 @@ XLParser<TWorkBook>::XLParser(std::shared_ptr<BaseReader> reader) :
 	m_row_number(0)
 {
 	m_schema.header_row = -1;
-	m_schema.first_data_row = 0;
+	m_schema.first_data_row = 1;
 }
 
 template<class TWorkBook>
@@ -34,7 +34,7 @@ bool XLParser<TWorkBook>::do_infer_schema()
 	if (!open())
 		return false;
 	m_schema.header_row = -1;
-	m_schema.first_data_row = 0;
+	m_schema.first_data_row = 1;
 	infer_table(nullptr);
 	int n_rows = m_ws.nrows();
 	if (n_rows > 0)
@@ -129,7 +129,7 @@ int64_t XLParser<TWorkBook>::get_next_row_raw(RowRaw& row)
 	do {
 		if (!m_ws.next_row())
 			return -1;
-	} while (m_row_number++ < m_schema.first_data_row); // skip first rows
+	} while (++m_row_number < m_schema.first_data_row); // skip first rows
 	xls::CellValue value;
 	while (m_ws.next_cell(value))
 	{

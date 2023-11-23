@@ -29,6 +29,7 @@ private:
 };
 
 void rtrim(std::string& s);
+void rtrim(std::string_view s);
 void trim(std::string& s);
 
 bool is_integer(double v);

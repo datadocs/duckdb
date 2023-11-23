@@ -111,7 +111,7 @@ public:
 	std::string comment;
 	std::string charset;
 	int header_row;
-	size_t first_data_row; // 0-based ignoring empty text rows
+	size_t first_data_row; // 1-based ignoring empty text rows
 	size_t comment_lines_skipped_in_parsing = 0;
 	virtual ~CSVSchema() = default;
 };
