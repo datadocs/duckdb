@@ -8,12 +8,25 @@
 #include <unicode/ucnv.h>
 #include <unicode/ucsdet.h>
 
+#include "duckdb/common/string_util.hpp"
+
 #include "csv_reader.h"
 #include "utility.h"
 
 using namespace std::literals;
 
 namespace duckdb {
+
+enum class UnicodeType { INVALID, ASCII, UNICODE2 };
+enum class UnicodeInvalidReason { BYTE_MISMATCH, INVALID_UNICODE };
+
+class Utf8Proc {
+public:
+	static UnicodeType Analyze(const char *s, size_t len, UnicodeInvalidReason *invalid_reason = nullptr, size_t *invalid_pos = nullptr);
+};
+
+static constexpr idx_t BUFFER_SIZE = 1024 * 1024;
+//static constexpr idx_t BUFFER_SIZE = 32;
 
 namespace {
 
@@ -117,7 +130,6 @@ private:
 };
 
 const size_t SAMPLE_SIZE = 1024 * 1024;
-const size_t MAX_STRING_SIZE = 1024 * 1024 - 1; // not accounting for terminating 0
 static const std::regex _re_line_terminators(R"(\x02\n|\r\n|\n|\r)"); // max 2 chars
 static const std::regex _re_universal_newlines(R"(\r\n|\n|\r)"); // these are interchangeable
 static const std::array<std::string, 4> _comment_chars { "#", "//", "/*", "*/" }; // max 2 chars
@@ -146,7 +158,7 @@ CSVParser::CSVParser(std::shared_ptr<BaseReader> reader) :
 	m_schema.quote_char = '"';
 	m_schema.escape_char = '\0';
 	m_schema.header_row = -1;
-	m_schema.first_data_row = 0;
+	m_schema.first_data_row = 1;
 }
 
 CSVParser::~CSVParser()
@@ -261,10 +273,10 @@ bool CSVParser::do_infer_schema()
 				if (line[i] == '"') // found quoted value, if it's not surrounded by delimiters then quotes are messed up, ignore them
 				{
 					for (size_t j = i; j > 0 && line[j - 1] != m_schema.delimiter; --j)
-						if (!(quoting = std::isspace(line[j - 1])))
+						if (!(quoting = StringUtil::CharacterIsSpace(line[j - 1])))
 							goto found_bad_quote;
 					for (size_t j = i; j < line.size() - 1 && line[j + 1] != m_schema.delimiter; ++j)
-						if (!(quoting = std::isspace(line[j + 1])))
+						if (!(quoting = StringUtil::CharacterIsSpace(line[j + 1])))
 							goto found_bad_quote;
 				}
 found_bad_quote:
@@ -272,19 +284,11 @@ found_bad_quote:
 		m_schema.quote_char = '"', m_schema.escape_char = escape == 1 ? '\\' : '\0';
 	else
 		m_schema.quote_char = m_schema.escape_char = '\0';
-
-	// estimate number of rows (for memory reservation)
-	if (!open())
-		return false;
-	char buf[4096];
-	while (size_t nread = m_reader->read(buf, sizeof(buf)))
-		m_schema.nrows += std::count(buf, buf + nread, m_schema.newline[0]);
-	close();
-
-	if (!open())
-		return false;
+	//m_schema.quote_char = '"';  m_schema.escape_char = '\\';
 	m_schema.header_row = -1;
-	m_schema.first_data_row = 0;
+	m_schema.first_data_row = 1;
+	if (!open())
+		return false;
 	infer_table(comment);
 	close();
 	
@@ -314,10 +318,27 @@ bool CSVParser::open()
 			m_reader->skip_prefix("\xFE\xFF"sv);
 		m_cvt_buf.reset(new ucvt_streambuf(m_reader, std::move(ucnv_from), std::move(ucnv_to)));
 	}
-	m_row_number = 0;
 	m_schema.comment_lines_skipped_in_parsing = 0;
-	beg = cur = end = buf;
-	return ParserImpl::open();
+
+	optimized = !m_schema.columns.empty();
+	if (optimized) {
+		for (size_t i_col = 0; i_col < m_schema.columns.size()-1; ++i_col) {
+			if (m_schema.columns[i_col].column_type != ColumnType::String) {
+				optimized = false;
+				break;
+			}
+		}
+	}
+	cur = end = nullptr;
+	is_finished = read_finished = false;
+	buffer = make_unsafe_uniq_array<char>(BUFFER_SIZE);
+	for (m_row_number = 0; m_row_number < m_schema.first_data_row - 1; ++m_row_number) // skip first rows
+	{
+		char c;
+		if (!next_char(c)) return false;
+		while (!is_newline(c)) if (!next_char(c)) return false;
+	}
+	return true;
 }
 
 void CSVParser::close()
@@ -333,39 +354,305 @@ int CSVParser::get_percent_complete()
 
 bool CSVParser::next_char(char& c)
 {
-	int cc = cur < end ? *cur : underflow();
-	bool ret = cc != EOF;
-	c = (char)cc;
-	cur += ret;
-	return ret;
+	if (cur < end || underflow()) {
+		c = *cur++;
+		return true;
+	}
+	return false;
 }
 
 bool CSVParser::check_next_char(char c)
 {
-	bool ret = cur < end ? *cur == c : underflow() == (unsigned char)c;
-	cur += ret;
-	return ret;
+	if (cur < end || underflow()) {
+		bool ret = *cur == c;
+		cur += ret;
+		return ret;
+	}
+	return false;
 }
 
-int CSVParser::underflow()
+bool CSVParser::underflow()
 {
-	beg = cur = buf;
+	// check total buffer length or tmp_value length
+	if (read_finished) {
+		is_finished = true;
+		return false;
+	}
+	char* start = buffer.get();
 	size_t n = 0;
 	if (m_cvt_buf) {
-		while(n < sizeof(buf) && m_cvt_buf->get(beg[n]))
+		while(n < BUFFER_SIZE && m_cvt_buf->get(start[n]))
 			++n;
 	} else {
-		n = m_reader->read(buf, sizeof(buf));
+		n = m_reader->read(start, BUFFER_SIZE);
 	}
-	end = buf + n;
-	return n != 0 ? (unsigned char)*cur : EOF;
+	read_finished = n < BUFFER_SIZE;
+	if (n == 0) {
+		return false;
+	}
+	cur = start;
+	end = cur + n;
+	return true;
 }
 
 bool CSVParser::is_newline(char c)
 {
-	return m_schema.newline.empty() ?
-		(c == '\r' || c == '\n') :
+	return /*m_schema.newline.empty() ?
+		(c == '\r' || c == '\n') :*/
 		(c == m_schema.newline[0] && (m_schema.newline.size() == 1 || check_next_char(m_schema.newline[1])));
+}
+
+void CSVParser::write_value(size_t i_col) {
+	if (i_col < m_columns.size() - 1) {
+		string_t s = tmp_string.empty() ? string_t(value_start, value_end - value_start) : tmp_string.AppendChunk(value_start, value_end);
+		auto utf_type = Utf8Proc::Analyze(s.GetData(), s.GetSize());
+		if (utf_type == UnicodeType::INVALID) {
+			throw InvalidInputException("Invalid unicode");
+		}
+		if (m_schema.remove_null_strings && (s.GetSize() == 0 || s == "NULL" ) || !m_columns[i_col]->Write(s)) {
+			m_columns[i_col]->WriteNull();
+		}
+	}
+	tmp_string.clear();
+}
+
+idx_t CSVParser::FillChunk(DataChunk &output) {
+	if (!optimized) {
+		idx_t res = ParserImpl::FillChunk(output);
+		return res;
+	}
+
+	size_t n_columns = m_columns.size();
+	D_ASSERT(output.data.size() == n_columns);
+	for (size_t i = 0; i < n_columns; ++i) {
+		m_columns[i]->SetVector(&output.data[i]);
+	}
+	--n_columns; // last column is row number
+
+	cur_row = 0;
+	size_t i_col;
+
+	while (cur < end || underflow()) {
+		i_col = 0;
+		if (!m_schema.comment.empty() && *cur == m_schema.comment[0]) {
+			++cur;
+			if (m_schema.comment.size() == 1) {
+				goto state_comment;
+			}
+			if (cur >= end) {
+				if (underflow()) {
+					if (*cur == m_schema.comment[1]) {
+						++cur;
+						goto state_comment;
+					}
+					tmp_string.AppendChar(m_schema.comment[0]);
+					goto state_unquoted;
+				}
+			} else if (*cur == m_schema.comment[1]) {
+				++cur;
+				goto state_comment;
+			}
+			--cur;
+		}
+		goto state_value_start;
+
+	state_comment:
+		while (true) {
+			if (cur >= end && !underflow()) goto state_eof;
+			if (*cur == m_schema.newline[0]) {
+				++cur;
+				if (m_schema.newline.size() == 1) {
+					break;
+				}
+				if (cur >= end && !underflow()) goto state_eof;
+				if (*cur == m_schema.newline[1]) {
+					++cur;
+					break;
+				}
+				continue;
+			}
+			++cur;
+		}
+		++m_row_number;
+		continue;
+
+	state_value_start:
+		if (*cur == m_schema.quote_char) {
+			++cur;
+			value_start = cur;
+
+			while (true) {
+				while (true) {
+					if (cur >= end) {
+						if (read_finished) {
+							value_end = cur;
+							goto state_row_end_quoted;
+						}
+						tmp_string.AppendChunk(value_start, cur);
+						value_start = buffer.get();
+						if (!underflow()) {
+							value_end = value_start;
+							goto state_row_end_quoted;
+						}
+					}
+					if (*cur == m_schema.quote_char) {
+						value_end = cur;
+						++cur;
+						break;
+					}
+					if (*cur == m_schema.escape_char) {
+						tmp_string.AppendChunk(value_start, cur);
+						++cur;
+						if (cur >= end && !underflow()) {
+							value_start = value_end = nullptr;
+							goto state_row_end_quoted;
+						}
+						value_start = cur;
+					}
+					++cur;
+				}
+
+				if (cur >= end) {
+					if (read_finished) {
+						goto state_row_end_quoted;
+					}
+					tmp_string.AppendChunk(value_start, value_end);
+					value_start = value_end = nullptr;
+					if (!underflow()) {
+						goto state_row_end_quoted;
+					}
+				}
+				if (*cur == m_schema.delimiter) {
+					++cur;
+					goto state_value_end;
+				}
+				if (*cur == m_schema.newline[0]) {
+					if (m_schema.newline.size() == 1) {
+						++cur;
+						goto state_row_end_quoted;
+					}
+					++cur;
+					if (cur >= end) {
+						if (read_finished) {
+							goto state_row_end_quoted;
+						}
+						tmp_string.AppendChunk(value_start, value_end);
+						value_start = value_end = nullptr;
+						if (!underflow()) {
+							goto state_row_end_quoted;
+						}
+						if (*cur == m_schema.newline[1]) {
+							++cur;
+							goto state_row_end_quoted;
+						}
+						tmp_string.AppendChar(m_schema.quote_char);
+						tmp_string.AppendChar(m_schema.newline[0]);
+						value_start = cur;
+						continue;
+					} else if (*cur == m_schema.newline[1]) {
+						++cur;
+						goto state_row_end_quoted;
+					}
+					--cur;
+				} else if (*cur == m_schema.quote_char) {
+					tmp_string.AppendChunk(value_start, value_end);
+					value_start = cur;
+					++cur;
+					continue;
+				}
+
+				if (!value_start) {
+					tmp_string.AppendChar(m_schema.quote_char);
+					value_start = cur;
+				}
+			}
+		} else {
+
+		state_unquoted:
+			value_start = cur;
+			while (true) {
+				if (*cur == m_schema.delimiter) {
+					value_end = cur;
+					++cur;
+					goto state_value_end;
+				}
+				if (*cur == m_schema.newline[0]) {
+					if (m_schema.newline.size() == 1) {
+						value_end = cur;
+						++cur;
+						goto state_row_end;
+					}
+					++cur;
+					if (cur >= end) {
+						if (read_finished) {
+							value_end = cur;
+							goto state_row_end;
+						}
+						tmp_string.AppendChunk(value_start, cur-1);
+						if (!underflow()) {
+							value_start = cur - 1;
+							value_end = cur;
+							goto state_row_end;
+						}
+						if (*cur == m_schema.newline[1]) {
+							++cur;
+							value_start = value_end = nullptr;
+							goto state_row_end;
+						}
+						tmp_string.AppendChar(m_schema.newline[0]);
+						value_start = cur;
+					} else if (*cur == m_schema.newline[1]) {
+						value_end = cur - 1;
+						++cur;
+						goto state_row_end;
+					}
+					continue;
+				}
+				++cur;
+				if (cur >= end) {
+					if (read_finished) {
+						value_end = cur;
+						goto state_row_end;
+					}
+					tmp_string.AppendChunk(value_start, cur);
+					value_start = buffer.get();
+					if (!underflow()) {
+						value_end = value_start;
+						goto state_row_end;
+					}
+				}
+			}
+		}
+
+	state_value_end:
+		write_value(i_col++);
+		if (cur >= end) {
+			if (!underflow()) {
+				value_start = value_end = nullptr;
+				goto state_row_end;
+			}
+		}
+		goto state_value_start;
+
+	state_row_end:
+		if (i_col == 0 && tmp_string.empty() && value_start == value_end) {
+			++m_row_number;
+			continue;
+		}
+
+	state_row_end_quoted:
+		write_value(i_col++);
+		while (i_col < n_columns)
+			m_columns[i_col++]->WriteNull();
+		m_columns.back()->Write((int64_t)++m_row_number);
+		if (++cur_row >= STANDARD_VECTOR_SIZE) {
+			return cur_row;
+		}
+	}
+
+state_eof:
+	close();
+	return cur_row;
 }
 
 int64_t CSVParser::get_next_row_raw(RowRaw& row)
@@ -376,13 +663,8 @@ int64_t CSVParser::get_next_row_raw(RowRaw& row)
 	row.clear();
 
 	char c;
-	if (!next_char(c)) return -1;
-	while (m_row_number++ < m_schema.first_data_row) // skip first rows
-	{
-		while (!is_newline(c)) if (!next_char(c)) return -1;
-		do { if (!next_char(c)) return -1; } while (is_newline(c));
-	}
-	do
+	++m_row_number;
+	while (next_char(c))
 	{
 		if (!in_quotes)
 		{
@@ -395,6 +677,7 @@ int64_t CSVParser::get_next_row_raw(RowRaw& row)
 					rtrim(*field);
 					return (int64_t)m_row_number;
 				}
+				++m_row_number;
 				continue; // Skip empty rows
 			}
 
@@ -435,13 +718,13 @@ int64_t CSVParser::get_next_row_raw(RowRaw& row)
 			else if (c == m_schema.escape_char && m_schema.escape_char != '\0' && !next_char(c))
 				break;
 		}
-		if (field->empty() && std::isspace((unsigned char)c)) // left-trim whitespace
+		if (field->empty() && StringUtil::CharacterIsSpace((unsigned char)c)) // left-trim whitespace
 			;
 		else if (field->size() < MAX_STRING_SIZE)
 			*field += c;
 		else
 			m_schema.has_truncated_string = true;
-	} while (next_char(c));
+	}
 	return row.empty() ? -1 : (int64_t)m_row_number;
 }
 

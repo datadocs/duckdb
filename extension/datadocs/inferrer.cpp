@@ -21,6 +21,7 @@
 #include <boost/iterator/indirect_iterator.hpp>
 #include <boost/unordered_map.hpp>
 
+#include "duckdb/common/string_util.hpp"
 #include "column.hpp"
 
 #include "xls/xlscommon.h"
@@ -260,8 +261,6 @@ static std::string ConvertRawToString(CellRaw& src)
 
 bool ParserImpl::open()
 {
-	const Schema& schema = *get_schema();
-	size_t n_columns = schema.columns.size();
 	is_finished = false;
 	return true;
 }
@@ -311,9 +310,9 @@ public:
 		{
 			pos = 1;
 			last_pos = s.size() - 1;
-			while (pos < last_pos && std::isspace(s[pos]))
+			while (pos < last_pos && StringUtil::CharacterIsSpace(s[pos]))
 				++pos;
-			while (pos < last_pos && std::isspace(s[last_pos - 1]))
+			while (pos < last_pos && StringUtil::CharacterIsSpace(s[last_pos - 1]))
 				--last_pos;
 			if (pos == last_pos) // empty list "<   >"
 			{
@@ -334,9 +333,9 @@ public:
 			new_pos = end_pos = s.find(',', pos);
 			if (end_pos == std::string::npos)
 				end_pos = last_pos;
-			while (pos < end_pos && std::isspace(s[pos]))
+			while (pos < end_pos && StringUtil::CharacterIsSpace(s[pos]))
 				++pos;
-			while (pos < end_pos && std::isspace(s[end_pos - 1]))
+			while (pos < end_pos && StringUtil::CharacterIsSpace(s[end_pos - 1]))
 				--end_pos;
 			string value = s.substr(pos, end_pos - pos);
 
@@ -384,14 +383,14 @@ public:
 		{
 			if (*--end != '>')
 				return false;
-			while (std::isspace(*++begin));
+			while (StringUtil::CharacterIsSpace(*++begin));
 		}
 		std::vector<string> values;
 		while (begin < end)
 		{
 			if (!wkt_to_bytes(begin, end, values.emplace_back()))
 				return false;
-			while (std::isspace(*begin) || *begin == ',')
+			while (StringUtil::CharacterIsSpace(*begin) || *begin == ',')
 				++begin;
 		}
 		if (begin != end)
@@ -1014,9 +1013,9 @@ public:
 		{
 			pos = 1;
 			last_pos = s.size() - 1;
-			while (pos < last_pos && std::isspace(s[pos]))
+			while (pos < last_pos && StringUtil::CharacterIsSpace(s[pos]))
 				++pos;
-			while (pos < last_pos && std::isspace(s[last_pos - 1]))
+			while (pos < last_pos && StringUtil::CharacterIsSpace(s[last_pos - 1]))
 				--last_pos;
 			if (pos == last_pos) // empty list "<   >"
 				return 1;
@@ -1031,9 +1030,9 @@ public:
 			new_pos = end_pos = s.find(',', pos);
 			if (end_pos == std::string::npos)
 				end_pos = last_pos;
-			while (pos < end_pos && std::isspace((unsigned char)s[pos]))
+			while (pos < end_pos && StringUtil::CharacterIsSpace((unsigned char)s[pos]))
 				++pos;
-			while (pos < end_pos && std::isspace((unsigned char)s[end_pos - 1]))
+			while (pos < end_pos && StringUtil::CharacterIsSpace((unsigned char)s[end_pos - 1]))
 				--end_pos;
 			CellRaw value = s.substr(pos, end_pos - pos);
 			if (std::apply([&value](auto&& ... args) { return (args.infer(value) + ...); }, m_types) == 0)
@@ -1632,30 +1631,35 @@ void ParserImpl::build_column_info(std::vector<Column>& columns)
 		size_t no_start = 0;
 		if (col_name->empty())
 			prefix = "Field_", no_start = i_col + 1;
-		else if (have_columns.find(*col_name) != have_columns.end())
+		else if (!have_columns.insert(StringUtil::Lower(*col_name)).second)
 			prefix = *col_name + '_', no_start = 2;
 		if (no_start > 0)
 			for (size_t no = no_start; ; ++no)
 			{
 				new_name = prefix + std::to_string(no);
-				if (have_columns.find(new_name) == have_columns.end())
+				if (have_columns.insert(StringUtil::Lower(new_name)).second)
 				{
 					col_name = &new_name;
 					break;
 				}
 			}
-		have_columns.insert(*col_name);
 		schema.columns.push_back({ *col_name, ColumnType::String, (int)i_col, false });
 		columns[i_col].create_schema(schema.columns.back());
 	}
 }
 
+class RowRawNumbered : public RowRaw {
+public:
+	using RowRaw::RowRaw;
+	int64_t row_no;
+};
+
 void ParserImpl::infer_table(const std::string* comment)
 {
 	size_t comment_lines_skipped_in_parsing = 0;
-	std::vector<RowRaw> rows(INFER_MAX_ROWS);
+	std::vector<RowRawNumbered> rows(INFER_MAX_ROWS);
 	for (size_t i_row = 0; i_row < rows.size(); ++i_row)
-		if (get_next_row_raw(rows[i_row]) < 0)
+		if ((rows[i_row].row_no = get_next_row_raw(rows[i_row])) < 0)
 		{
 			rows.resize(i_row);
 			break;
@@ -1664,14 +1668,14 @@ void ParserImpl::infer_table(const std::string* comment)
 		return;
 
 	if (get_schema()->remove_null_strings)
-		for (RowRaw& row : rows)
+		for (auto& row : rows)
 			for (CellRaw& cell : row)
 				if (cell_null_str(cell))
 					std::get<std::string>(cell).clear();
 
 	// remove trailing columns which are empty across all lines
 	size_t n_columns = 0;
-	for (const RowRaw& row : rows)
+	for (const auto& row : rows)
 		for (size_t i_col = row.size(); i_col > 0; --i_col)
 			if (!cell_empty(row[i_col - 1]))
 			{
@@ -1680,7 +1684,7 @@ void ParserImpl::infer_table(const std::string* comment)
 				break;
 			}
 	std::unordered_map<size_t, size_t> cnt_columns;
-	for (RowRaw& row : rows)
+	for (auto& row : rows)
 	{
 		if (row.size() > n_columns)
 			row.resize(n_columns);
@@ -1695,11 +1699,10 @@ void ParserImpl::infer_table(const std::string* comment)
 
 	std::vector<Column> columns(n_columns);
 
-	size_t header_row = 0, data_row;
+	size_t header_row = 0, data_row = 0;
 	bool found_header;
 	if (rows.size() == 1)
 	{
-		data_row = 1;
 		found_header = true;
 	}
 	else
@@ -1707,7 +1710,7 @@ void ParserImpl::infer_table(const std::string* comment)
 		int header_score = 0;
 		for (size_t i_row = 0; i_row < rows.size(); ++i_row)
 		{
-			const RowRaw& row = rows[i_row];
+			const auto& row = rows[i_row];
 			int sep_value = row.size() == n_columns;
 			int nonblanks = std::none_of(row.begin(), row.end(), cell_empty);
 			int row_offset = INFER_MAX_ROWS - (int)i_row;
@@ -1722,7 +1725,7 @@ void ParserImpl::infer_table(const std::string* comment)
 			if (score > header_score)
 				header_score = score, header_row = i_row;
 		}
-		RowRaw& header = rows[header_row];
+		auto& header = rows[header_row];
 		header.resize(n_columns);
 		if (comment != nullptr)
 		{
@@ -1737,7 +1740,7 @@ void ParserImpl::infer_table(const std::string* comment)
 		data_row = 0;
 		for (size_t i_row = header_row + 1; i_row < rows.size(); ++i_row)
 		{
-			RowRaw& row = rows[i_row];
+			auto& row = rows[i_row];
 			if (!std::all_of(row.begin(), row.end(), cell_empty)) // exclude empty lines
 			{
 				if (comment != nullptr)
@@ -1760,8 +1763,6 @@ void ParserImpl::infer_table(const std::string* comment)
 			}
 		}
 		rows.resize(iw);
-		if (data_row == 0)
-			data_row = header_row + 1;
 
 		for (size_t i_col = 0; i_col < n_columns; ++i_col)
 			for (size_t i_row = 1; i_row < rows.size(); ++i_row) // ignore potential header for now
@@ -1797,22 +1798,27 @@ void ParserImpl::infer_table(const std::string* comment)
 		for (size_t i_col = 0; i_col < n_columns; ++i_col)
 			columns[i_col].bytes_per_value /= rows.size()-1;
 	}
-
-	if (found_header)
+	header_row = rows[0].row_no;
+	if (found_header) {
+		data_row = data_row == 0 ? header_row + 1 : rows[1].row_no;
 		for (size_t i = 0; i < columns.size(); ++i)
 			columns[i].name = ConvertRawToString(rows[0][i]);
+	} else {
+		data_row = header_row;
+		header_row = -1;
+	}
 
 	build_column_info(columns);
 	if (CSVSchema* schema = dynamic_cast<CSVSchema*>(get_schema()))
 	{
-		schema->header_row = found_header ? header_row : -1;
-		schema->first_data_row = found_header ? data_row : header_row;
+		schema->header_row = header_row;
+		schema->first_data_row = data_row;
 		schema->comment_lines_skipped_in_parsing = comment_lines_skipped_in_parsing;
 	}
 	else if (XLSSchema* schema = dynamic_cast<XLSSchema*>(get_schema()))
 	{
-		schema->header_row = found_header ? header_row : -1;
-		schema->first_data_row = found_header ? data_row : header_row;
+		schema->header_row = header_row;
+		schema->first_data_row = data_row;
 		schema->comment_lines_skipped_in_parsing = comment_lines_skipped_in_parsing;
 	}
 }
