@@ -19,6 +19,12 @@ struct CellRawDate {
 typedef std::variant<std::string, int64_t, bool, double, CellRawDate> CellRaw;
 typedef std::vector<CellRaw> RowRaw;
 
+class RowRawNumbered : public RowRaw {
+public:
+	using RowRaw::RowRaw;
+	int64_t row_no;
+};
+
 class Column;
 class BaseReader;
 
@@ -52,6 +58,7 @@ protected:
 	virtual int64_t get_next_row_raw(RowRaw& row) { return -1; };
 	void build_column_info(std::vector<Column>& columns);
 	void infer_table(const std::string* comment);
+	void do_infer_table(const std::string* comment, std::vector<RowRawNumbered>& rows);
 
 	std::vector<std::unique_ptr<IngestColBase>> m_columns;
 	idx_t cur_row;
