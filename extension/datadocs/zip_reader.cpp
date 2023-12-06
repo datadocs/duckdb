@@ -192,11 +192,21 @@ bool ZIPParser::do_open_zip()
 	return true;
 }
 
-int64_t ZIPParser::get_next_row_raw(RowRaw& row)
+void ZIPParser::BuildColumns() {
+	if (m_parser)
+		m_parser->BuildColumns();
+}
+
+void ZIPParser::BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) {
+	if (m_parser)
+		m_parser->BindSchema(return_types, names);
+}
+
+idx_t ZIPParser::FillChunk(DataChunk &output)
 {
 	if (m_parser)
-		return m_parser->get_next_row_raw(row);
-	return -1;
+		return m_parser->FillChunk(output);
+	return 0;
 }
 
 }

@@ -15,6 +15,8 @@ public:
 	virtual Schema* get_schema() override;
 	virtual bool open() override;
 	virtual void close() override;
+	virtual void BuildColumns() override;
+	virtual void BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) override;
 	virtual int get_percent_complete() override;
 	virtual size_t get_sheet_count() override;
 	virtual std::vector<std::string> get_sheet_names() override;
@@ -24,10 +26,10 @@ public:
 	virtual std::vector<std::string> get_file_names() override;
 	virtual bool select_file(const std::string& file_name) override;
 	virtual bool select_file(size_t file_number) override;
+	virtual idx_t FillChunk(DataChunk &output) override;
 
 protected:
 	bool do_open_zip();
-	virtual int64_t get_next_row_raw(RowRaw& row) override;
 
 	Schema m_invalid_schema;
 	std::shared_ptr<BaseReader> m_reader;
