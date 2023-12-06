@@ -1648,31 +1648,32 @@ void ParserImpl::build_column_info(std::vector<Column>& columns)
 	}
 }
 
-class RowRawNumbered : public RowRaw {
-public:
-	using RowRaw::RowRaw;
-	int64_t row_no;
-};
-
 void ParserImpl::infer_table(const std::string* comment)
 {
-	size_t comment_lines_skipped_in_parsing = 0;
 	std::vector<RowRawNumbered> rows(INFER_MAX_ROWS);
-	for (size_t i_row = 0; i_row < rows.size(); ++i_row)
+	for (size_t i_row = 0; i_row < rows.size(); ++i_row) {
 		if ((rows[i_row].row_no = get_next_row_raw(rows[i_row])) < 0)
 		{
 			rows.resize(i_row);
 			break;
 		}
-	if (rows.empty())
-		return;
+	}
+	if (!rows.empty())
+		do_infer_table(comment, rows);
+}
 
-	if (get_schema()->remove_null_strings)
-		for (auto& row : rows)
-			for (CellRaw& cell : row)
-				if (cell_null_str(cell))
-					std::get<std::string>(cell).clear();
+void ParserImpl::do_infer_table(const std::string* comment, std::vector<RowRawNumbered>& rows) {
+	for (size_t i_row = 0; i_row < rows.size(); ++i_row) {
+		for (CellRaw& cell : rows[i_row]) {
+			if (get_schema()->remove_null_strings && cell_null_str(cell))
+				std::get<std::string>(cell).clear();
+			else if (std::holds_alternative<std::string>(cell)) {
+				trim(std::get<std::string>(cell));
+			}
+		}
+	}
 
+	size_t comment_lines_skipped_in_parsing = 0;
 	// remove trailing columns which are empty across all lines
 	size_t n_columns = 0;
 	for (const auto& row : rows)

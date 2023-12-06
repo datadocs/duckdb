@@ -42,17 +42,16 @@ protected:
 	bool check_next_char(char c);
 	bool underflow();
 	bool is_newline(char c);
-	virtual int64_t get_next_row_raw(RowRaw& row) override;
 	void write_value(size_t i_col);
 
 	CSVSchema m_schema;
 	std::shared_ptr<BaseReader> m_reader;
 	std::unique_ptr<ucvt_streambuf> m_cvt_buf;
 	size_t m_row_number;
+	bool is_inferring;
 	LimitedString tmp_string;
 	unsafe_unique_array<char> buffer;
 	bool read_finished;
-	bool optimized;
 	char *cur, *end;
 	char *value_start, *value_end;
 };

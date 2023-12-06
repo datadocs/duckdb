@@ -58,6 +58,30 @@ struct CUConverter
 	UConverter* m_pointer;
 };
 
+class IngestColCSVInfer : public IngestColBase {
+public:
+	IngestColCSVInfer(std::vector<RowRawNumbered> &rows, idx_t &cur_row)
+	    : IngestColBase("", cur_row), i_row(cur_row), rows(rows) {
+	}
+
+	bool Write(string_t v) override {
+		rows[i_row].emplace_back(v.GetString());
+		return true;
+	}
+
+	bool Write(int64_t v) override {
+		rows[i_row].row_no = v;
+		if (i_row >= rows.size() - 1) {
+			i_row = STANDARD_VECTOR_SIZE;
+		}
+		return true;
+	}
+
+private:
+	idx_t &i_row;
+	std::vector<RowRawNumbered> &rows;
+};
+
 }
 
 class ucvt_streambuf
@@ -152,7 +176,8 @@ static std::vector<std::string_view> split(const std::string& s, const std::stri
 
 CSVParser::CSVParser(std::shared_ptr<BaseReader> reader) :
 	m_reader(reader),
-	m_row_number(0)
+	m_row_number(0),
+	is_inferring(false)
 {
 	m_schema.delimiter = ',';
 	m_schema.quote_char = '"';
@@ -289,7 +314,19 @@ found_bad_quote:
 	m_schema.first_data_row = 1;
 	if (!open())
 		return false;
-	infer_table(comment);
+
+	std::vector<RowRawNumbered> rows(INFER_MAX_ROWS);
+	DataChunk output;
+	output.data.emplace_back(LogicalType::SQLNULL, nullptr);
+	m_columns.push_back(std::make_unique<IngestColCSVInfer>(rows, cur_row));
+	is_inferring = true;
+	idx_t n_rows = FillChunk(output);
+	if (n_rows <= STANDARD_VECTOR_SIZE) {
+		rows.resize(n_rows);
+	}
+	is_inferring = false;
+	m_columns.clear();
+	do_infer_table(comment, rows);
 	close();
 	
 //	if (std::regex_match(m_schema.newline, _re_universal_newlines))
@@ -320,15 +357,6 @@ bool CSVParser::open()
 	}
 	m_schema.comment_lines_skipped_in_parsing = 0;
 
-	optimized = !m_schema.columns.empty();
-	if (optimized) {
-		for (size_t i_col = 0; i_col < m_schema.columns.size()-1; ++i_col) {
-			if (m_schema.columns[i_col].column_type != ColumnType::String) {
-				optimized = false;
-				break;
-			}
-		}
-	}
 	cur = end = nullptr;
 	is_finished = read_finished = false;
 	buffer = make_unsafe_uniq_array<char>(BUFFER_SIZE);
@@ -403,25 +431,28 @@ bool CSVParser::is_newline(char c)
 }
 
 void CSVParser::write_value(size_t i_col) {
-	if (i_col < m_columns.size() - 1) {
-		string_t s = tmp_string.empty() ? string_t(value_start, value_end - value_start) : tmp_string.AppendChunk(value_start, value_end);
-		auto utf_type = Utf8Proc::Analyze(s.GetData(), s.GetSize());
-		if (utf_type == UnicodeType::INVALID) {
-			throw InvalidInputException("Invalid unicode");
+	bool remove_null_strings = m_schema.remove_null_strings;
+	if (i_col >= m_columns.size() - 1) {
+		if (is_inferring) {
+			i_col = 0;
+			remove_null_strings = false;
+		} else {
+			tmp_string.clear();
+			return;
 		}
-		if (m_schema.remove_null_strings && (s.GetSize() == 0 || s == "NULL" ) || !m_columns[i_col]->Write(s)) {
-			m_columns[i_col]->WriteNull();
-		}
+	}
+	string_t s = tmp_string.empty() ? string_t(value_start, value_end - value_start) : tmp_string.AppendChunk(value_start, value_end);
+	auto utf_type = Utf8Proc::Analyze(s.GetData(), s.GetSize());
+	if (utf_type == UnicodeType::INVALID) {
+		throw InvalidInputException("Invalid unicode");
+	}
+	if (remove_null_strings && (s.GetSize() == 0 || s == "NULL" || s == "null") || !m_columns[i_col]->Write(s)) {
+		m_columns[i_col]->WriteNull();
 	}
 	tmp_string.clear();
 }
 
 idx_t CSVParser::FillChunk(DataChunk &output) {
-	if (!optimized) {
-		idx_t res = ParserImpl::FillChunk(output);
-		return res;
-	}
-
 	size_t n_columns = m_columns.size();
 	D_ASSERT(output.data.size() == n_columns);
 	for (size_t i = 0; i < n_columns; ++i) {
@@ -653,79 +684,6 @@ idx_t CSVParser::FillChunk(DataChunk &output) {
 state_eof:
 	close();
 	return cur_row;
-}
-
-int64_t CSVParser::get_next_row_raw(RowRaw& row)
-{
-	std::string* field = nullptr;
-	bool in_quotes = false;
-	bool in_comment = false;
-	row.clear();
-
-	char c;
-	++m_row_number;
-	while (next_char(c))
-	{
-		if (!in_quotes)
-		{
-			if (is_newline(c)) // found newline
-			{
-				if (in_comment)
-					in_comment = false;
-				else if (!row.empty())
-				{
-					rtrim(*field);
-					return (int64_t)m_row_number;
-				}
-				++m_row_number;
-				continue; // Skip empty rows
-			}
-
-			if (in_comment)
-				continue;
-			if (field == nullptr) // first character of the row
-			{
-				if (!m_schema.comment.empty() &&
-					c == m_schema.comment[0] && (m_schema.comment.size() == 1 || check_next_char(m_schema.comment[1])))
-				{
-					in_comment = true;
-					++m_schema.comment_lines_skipped_in_parsing;
-					continue;
-				}
-				field = &std::get<std::string>(row.emplace_back(std::in_place_type<std::string>));
-			}
-
-			if (c == m_schema.delimiter)
-			{
-				rtrim(*field);
-				field = &std::get<std::string>(row.emplace_back(std::in_place_type<std::string>));
-				continue;
-			}
-
-			if (c == m_schema.quote_char && c != '\0')
-			{
-				in_quotes = true;
-				continue;
-			}
-		}
-		else // in quotes
-		{
-			if (c == m_schema.quote_char && !check_next_char(m_schema.quote_char)) // not a double quote
-			{
-				in_quotes = false;
-				continue;
-			}
-			else if (c == m_schema.escape_char && m_schema.escape_char != '\0' && !next_char(c))
-				break;
-		}
-		if (field->empty() && StringUtil::CharacterIsSpace((unsigned char)c)) // left-trim whitespace
-			;
-		else if (field->size() < MAX_STRING_SIZE)
-			*field += c;
-		else
-			m_schema.has_truncated_string = true;
-	}
-	return row.empty() ? -1 : (int64_t)m_row_number;
 }
 
 WKTParser::WKTParser(std::shared_ptr<BaseReader> reader) :
