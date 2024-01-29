@@ -294,12 +294,12 @@ public:
 	IngestColList(const IngestColumnDefinition &col, idx_t &cur_row)
 	    : IngestColBase(col.column_name, cur_row), buffer(nullptr), child(BuildColumn(col, list_row)) {
 	}
-	virtual void SetVector(Vector *new_vec) noexcept {
+	virtual void SetVector(Vector *new_vec) noexcept override {
 		IngestColBase::SetVector(new_vec);
 		buffer = (VectorListBuffer *)(new_vec->GetAuxiliary().get());
 		child->SetVector(&buffer->GetChild());
 	}
-	virtual LogicalType GetType() const {
+	virtual LogicalType GetType() const override {
 		return LogicalType::LIST(child->GetType());
 	};
 
@@ -367,12 +367,12 @@ public:
 	IngestColWKTList(const IngestColumnDefinition &col, idx_t &cur_row)
 	    : IngestColBase(col.column_name, cur_row), buffer(nullptr), child(col.column_name, list_row) {
 	}
-	virtual void SetVector(Vector *new_vec) noexcept {
+	virtual void SetVector(Vector *new_vec) noexcept override {
 		IngestColBase::SetVector(new_vec);
 		buffer = (VectorListBuffer *)(new_vec->GetAuxiliary().get());
 		child.SetVector(&buffer->GetChild());
 	}
-	virtual LogicalType GetType() const {
+	virtual LogicalType GetType() const override {
 		return LogicalType::LIST(child.GetType());
 	};
 
@@ -416,11 +416,11 @@ public:
 	    : IngestColBase(col.column_name, cur_row), dispatcher(dispatcher), handler(JSONBuildColumn(col, cur_row)) {
 	}
 
-	virtual void SetVector(Vector *new_vec) noexcept {
+	virtual void SetVector(Vector *new_vec) noexcept override {
 		IngestColBase::SetVector(new_vec);
 		handler->column.SetVector(new_vec);
 	}
-	virtual LogicalType GetType() const {
+	virtual LogicalType GetType() const override {
 		return handler->column.GetType();
 	};
 
@@ -442,11 +442,11 @@ public:
 		handler.assign(XMLBuildColumn(col, cur_row));
 	}
 
-	virtual void SetVector(Vector *new_vec) noexcept {
+	virtual void SetVector(Vector *new_vec) noexcept override {
 		IngestColBase::SetVector(new_vec);
 		((XMLValueBase *)handler.m_root.get())->column.SetVector(new_vec);
 	}
-	virtual LogicalType GetType() const {
+	virtual LogicalType GetType() const override {
 		return ((XMLValueBase *)handler.m_root.get())->column.GetType();
 	};
 
@@ -468,7 +468,7 @@ void ParserImpl::BuildColumns() {
 		} else if (col.format == "XML") {
 			column = new IngestColNestedXML(col, cur_row, xml_handler);
 		}
-		else if (col.is_list) {
+		else if (col.list_levels) {
 			if (col.column_type == ColumnType::Geography) {
 				column = new IngestColWKTList(col, cur_row);
 			} else {
@@ -1050,7 +1050,7 @@ public:
 		{
 			m_valid = std::apply([&col](auto&& ... args) { return (args.create_schema(col) || ...); }, m_types);
 			if (m_valid)
-				col.is_list = true;
+				col.list_levels = 1;
 		}
 		return m_valid;
 	}
@@ -1089,7 +1089,7 @@ public:
 		if (m_valid)
 		{
 			col.column_type = ColumnType::String;
-			col.is_list = true;
+			col.list_levels = 1;
 		}
 		return m_valid;
 	}
@@ -1204,7 +1204,7 @@ private:
 		}
 		else if (m_has_single_value)
 			std::apply([&col](auto&& ... args) { return (args.create_schema(col) || ...); }, m_types);
-		col.is_list = m_is_list;
+		col.list_levels = m_is_list;
 	}
 
 	void create_schema(std::vector<IngestColumnDefinition>& fields, int col_index = 0) const
@@ -1318,7 +1318,7 @@ class JSONInferObject : public JSONHandler
 {
 public:
 	virtual ~JSONInferObject() = default;
-	virtual bool Null() { return true; }
+	virtual bool Null() override { return true; }
 	virtual bool Key(const char* s, int length, bool copy, JSONDispatcher* dispatcher) override;
 	bool create_schema(IngestColumnDefinition& col) const;
 	bool create_geometry(IngestColumnDefinition& col) const;
@@ -1331,7 +1331,7 @@ class JSONInferValue : public JSONHandler
 {
 public:
 	virtual ~JSONInferValue() = default;
-	virtual bool Null() { return true; }
+	virtual bool Null() override { return true; }
 	virtual bool Bool(bool b) override { m_value_types |= ValueBool; test_value(b); return true; }
 	virtual bool Int(int i) override { m_value_types |= ValueNumber; test_value((int64_t)i); return true; }
 	virtual bool Uint(unsigned i) override { m_value_types |= ValueNumber; test_value((int64_t)i); return true; }
@@ -1341,8 +1341,7 @@ public:
 	virtual bool String(const char* s, int length, bool copy) override { m_value_types |= ValueString; test_value(std::string(s, length)); return true; }
 	virtual bool StartObject(JSONDispatcher* dispatcher) override
 	{
-		if (m_level == 0)
-			m_flags |= ValueObject;
+		update_level(ValueObject);
 		dispatcher->push(&m_obj);
 		return true;
 	}
@@ -1367,31 +1366,42 @@ public:
 	{
 		CellRaw cell = std::move(value);
 		std::apply([&cell](auto&& ... args) { (args.infer(cell), ...); }, m_types);
+		update_level(ValueSingle);
+	}
+
+	void update_level(unsigned type) {
 		if (m_level == 0)
-			m_flags |= ValueSingle;
+			m_flags |= type;
+		else if (m_value_level != m_level) {
+			if (m_value_level == 0) {
+				m_value_level = m_level;
+			} else {
+				m_value_level = -1;
+			}
+		}
 	}
 
 	void create_schema(IngestColumnDefinition& col) const
 	{
-		if ((m_flags & ValueSingle) && (m_flags & (ValueObject | ValueArray)))
+		if ((m_flags & (m_flags - 1)) != 0)
 			col.column_type = ColumnType::Variant;
-		else if ((m_flags & ValueArray) && !m_obj.m_children.empty() && m_value_types > 0)
+		else if ((m_flags & ValueArray) && (m_value_level <= 0 || !m_obj.m_children.empty() && m_value_types > 0))
 		{
 			col.column_type = ColumnType::Variant;
-			col.is_list = true;
+			col.list_levels = 1;
 		}
 		else
 		{
 			m_obj.create_schema(col) || m_value_types != 0 &&
 				std::apply([&col](auto&& ... args) { return (args.create_schema(col) || ...); }, m_types);
 			if (m_flags & ValueArray)
-				col.is_list = true;
+				col.list_levels = m_value_level;
 		}
 	}
 
 	bool create_top_schema(JSONSchema& schema, size_t level = 0) const
 	{
-		if ((m_flags & ValueArray) && !m_obj.m_children.empty())
+		if ((m_flags == ValueArray) && !m_obj.m_children.empty() && m_value_level == 1)
 		{
 			m_obj.create_schema(schema.columns);
 			schema.start_path.resize(level);
@@ -1419,6 +1429,7 @@ public:
 	unsigned m_value_types = 0;
 	unsigned m_flags = 0;
 	int m_level = 0;
+	int m_value_level = 0;
 	JSONInferObject m_obj;
 };
 
@@ -1471,7 +1482,7 @@ void JSONInferObject::create_schema(std::vector<IngestColumnDefinition>& fields,
 		if (key == "geometry" && value.m_obj.create_geometry(col))
 		{
 			if (value.m_flags & JSONInferValue::ValueArray)
-				col.is_list = true;
+				col.list_levels = 1;
 		}
 		else
 			value.create_schema(col);
@@ -1567,7 +1578,7 @@ public:
 		{
 			col.column_type = ColumnType::Geography;
 			col.format = "WKT";
-			col.is_list = m_is_list;
+			col.list_levels = m_is_list;
 		}
 		return m_valid;
 	}
