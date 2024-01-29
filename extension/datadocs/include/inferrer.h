@@ -78,7 +78,7 @@ struct IngestColumnDefinition
 	std::string column_name;
 	ColumnType column_type;
 	int index; // source column
-	bool is_list;
+	int list_levels;
 	std::string format; // datetime format string
 	double bytes_per_value; // estimate for strings
 	bool is_json;

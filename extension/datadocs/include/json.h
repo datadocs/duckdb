@@ -62,7 +62,7 @@ protected:
 	class JSONSkip : public JSONHandler
 	{
 	public:
-		virtual bool Null() { return true; }
+		virtual bool Null() override { return true; }
 		virtual bool Bool(bool b) override { return true; }
 		virtual bool Int(int i) override { return true; }
 		virtual bool Uint(unsigned i) override { return true; }

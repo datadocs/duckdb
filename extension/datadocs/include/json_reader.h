@@ -39,7 +39,7 @@ public:
 	JSONValue(IngestColBase *column) : column(*column) {}
 	virtual ~JSONValue() = default;
 
-	virtual bool Null() { column.WriteNull(); return true; }
+	virtual bool Null() override { column.WriteNull(); return true; }
 	virtual bool Bool(bool b) override { return new_value(b); }
 	virtual bool Int(int i) override { return new_value((int64_t)i); }
 	virtual bool Uint(unsigned i) override { return new_value((int64_t)i); }
@@ -57,7 +57,7 @@ protected:
 	}
 };
 
-JSONValue *JSONBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row, bool ignore_list=false);
+JSONValue *JSONBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row, int list_level=0);
 
 class JSONTopListStruct : public JSONHandler {
 public:
@@ -68,7 +68,7 @@ public:
 	void BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names);
 	void NewChunk(DataChunk &output);
 
-	virtual bool Null() { ++m_row_number; return true; }
+	virtual bool Null() override { ++m_row_number; return true; }
 	virtual bool Bool(bool b) override { ++m_row_number; return true; }
 	virtual bool Int(int i) override { ++m_row_number; return true; }
 	virtual bool Uint(unsigned i) override { ++m_row_number; return true; }

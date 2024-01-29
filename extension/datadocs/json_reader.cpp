@@ -132,10 +132,11 @@ public:
 class JSONList : public JSONHandler
 {
 public:
-	JSONList(const IngestColumnDefinition &col) : buffer(nullptr), child(JSONBuildColumn(col, cur_row, true)) {
+	JSONList(const IngestColumnDefinition &col, int list_level)
+	    : buffer(nullptr), child(JSONBuildColumn(col, cur_row, list_level+1)) {
 	}
 
-	virtual bool Null() { Append();  return child->Null(); }
+	virtual bool Null() override { Append();  return child->Null(); }
 	virtual bool Bool(bool b) override { Append(); return child->Bool(b); }
 	virtual bool Int(int i) override { Append(); return child->Int(i); }
 	virtual bool Uint(unsigned i) override { Append(); return child->Uint(i); }
@@ -191,8 +192,8 @@ private:
 
 class JSONListWrapper : public JSONValue, public IngestColBase {
 public:
-	JSONListWrapper(const IngestColumnDefinition &col, idx_t &cur_row)
-	    : JSONValue(this), IngestColBase(col.column_name, cur_row), child(col) {
+	JSONListWrapper(const IngestColumnDefinition &col, idx_t &cur_row, int list_level)
+	    : JSONValue(this), IngestColBase(col.column_name, cur_row), child(col, list_level) {
 	}
 	virtual bool StartArray(JSONDispatcher* dispatcher) override {
 		child.Init(Writer().GetList());
@@ -201,11 +202,11 @@ public:
 		return true;
 	}
 
-	virtual void SetVector(Vector *new_vec) noexcept {
+	virtual void SetVector(Vector *new_vec) noexcept override {
 		IngestColBase::SetVector(new_vec);
 		child.SetVector(new_vec);
 	}
-	virtual LogicalType GetType() const {
+	virtual LogicalType GetType() const override {
 		return LogicalType::LIST(child.GetType());
 	};
 
@@ -571,9 +572,9 @@ private:
 	IngestColJSONVariantImpl impl;
 };
 
-JSONValue *JSONBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row, bool ignore_list) {
-	if (!ignore_list && col.is_list) {
-		return new JSONListWrapper(col, cur_row);
+JSONValue *JSONBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row, int list_level) {
+	if (col.list_levels > list_level) {
+		return new JSONListWrapper(col, cur_row, list_level);
 	}
 	switch(col.column_type) {
 	case ColumnType::String: return new JSONCol<IngestColVARCHAR>(col.column_name, cur_row);
