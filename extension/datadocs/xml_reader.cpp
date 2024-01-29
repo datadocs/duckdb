@@ -87,13 +87,13 @@ public:
 	    : XMLValueBase(this), IngestColBase(col.column_name, parent_cur_row), buffer(nullptr), column(BuildColumn(col, cur_row)) {
 	}
 
-	virtual void SetVector(Vector *new_vec) noexcept {
+	virtual void SetVector(Vector *new_vec) noexcept override {
 		IngestColBase::SetVector(new_vec);
 		buffer = (VectorListBuffer *)(new_vec->GetAuxiliary().get());
 		column->SetVector(&buffer->GetChild());
 	}
 
-	virtual LogicalType GetType() const {
+	virtual LogicalType GetType() const override {
 		return LogicalType::LIST(column->GetType());
 	};
 
@@ -212,13 +212,13 @@ public:
 	    : XMLValueBase(this), IngestColBase(col.column_name, parent_cur_row), buffer(nullptr), column(col, cur_row) {
 	}
 
-	virtual void SetVector(Vector *new_vec) noexcept {
+	virtual void SetVector(Vector *new_vec) noexcept override {
 		IngestColBase::SetVector(new_vec);
 		buffer = (VectorListBuffer *)(new_vec->GetAuxiliary().get());
 		column.SetVector(&buffer->GetChild());
 	}
 
-	virtual LogicalType GetType() const {
+	virtual LogicalType GetType() const override {
 		return LogicalType::LIST(column.GetType());
 	};
 
@@ -353,7 +353,7 @@ public:
 };
 
 XMLValueBase *XMLBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row) {
-	if (col.is_list) {
+	if (col.list_levels) {
 		if (col.column_type == ColumnType::Struct) {
 			return new XMLListStruct(col, cur_row);
 		}

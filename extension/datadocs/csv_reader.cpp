@@ -691,6 +691,7 @@ WKTParser::WKTParser(std::shared_ptr<BaseReader> reader) :
 {
 	m_schema.delimiter = '\0';
 	m_schema.quote_char = '\0';
+	m_schema.newline = "\n";
 	m_schema.columns.clear();
 	m_schema.charset = "ASCII";
 	m_schema.columns.push_back({ "geometry", ColumnType::Geography, 0, false });
