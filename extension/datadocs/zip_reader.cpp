@@ -111,7 +111,7 @@ std::vector<std::string> ZIPParser::get_sheet_names()
 	return std::vector<std::string>();
 }
 
-bool ZIPParser::select_sheet(const std::string& sheet_name)
+bool ZIPParser::select_sheet(const std::string_view &sheet_name)
 {
 	if (m_parser)
 		return m_parser->select_sheet(sheet_name);
@@ -141,7 +141,7 @@ std::vector<std::string> ZIPParser::get_file_names()
 	return m_files;
 }
 
-bool ZIPParser::select_file(const std::string& file_name)
+bool ZIPParser::select_file(const std::string_view &file_name)
 {
 	if (m_parser)
 		return m_parser->select_file(file_name);

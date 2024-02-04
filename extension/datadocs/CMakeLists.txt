@@ -101,6 +101,7 @@ set(DATADOCS_EXTENSION_FILES
 	file_reader.cpp
 	inferrer.cpp
 	ingest.cpp
+	ingest_schema.cpp
 	json_reader.cpp
 	type_conv.cpp
 	utility.cpp
@@ -120,6 +121,7 @@ if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/../../../rapidjson/include")
   include(contrib/rapidjson/CMakeLists.txt)
   add_dependencies(datadocs_extension rapidjson)
 endif()
+add_definitions(-DRAPIDJSON_HAS_STDSTRING=1)
 
 target_include_directories(datadocs_extension
 	PRIVATE include

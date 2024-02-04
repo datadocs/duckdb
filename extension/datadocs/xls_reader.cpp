@@ -89,7 +89,7 @@ std::vector<std::string> XLParser<TWorkBook>::get_sheet_names()
 }
 
 template<class TWorkBook>
-bool XLParser<TWorkBook>::select_sheet(const std::string& sheet_name)
+bool XLParser<TWorkBook>::select_sheet(const std::string_view &sheet_name)
 {
 	size_t sheet_cnt = get_sheet_count();
 	for (size_t i = 0; i < sheet_cnt; ++i)

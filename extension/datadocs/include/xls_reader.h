@@ -24,7 +24,7 @@ public:
 	virtual int get_percent_complete() override;
 	virtual size_t get_sheet_count() override;
 	virtual std::vector<std::string> get_sheet_names() override;
-	virtual bool select_sheet(const std::string& sheet_name) override;
+	virtual bool select_sheet(const std::string_view &sheet_name) override;
 	virtual bool select_sheet(size_t sheet_number) override;
 
 protected:
