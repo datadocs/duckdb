@@ -548,7 +548,7 @@ std::vector<std::string> ParserImpl::get_sheet_names()
 	return std::vector<std::string>();
 }
 
-bool ParserImpl::select_sheet(const std::string& sheet_name)
+bool ParserImpl::select_sheet(const std::string_view &sheet_name)
 {
 	return false;
 }
@@ -568,7 +568,7 @@ std::vector<std::string> ParserImpl::get_file_names()
 	return std::vector<std::string>();
 }
 
-bool ParserImpl::select_file(const std::string& file_name)
+bool ParserImpl::select_file(const std::string_view &file_name)
 {
 	return false;
 }
@@ -1097,6 +1097,57 @@ public:
 	bool m_valid = true;
 };
 
+static const std::regex _re_is_wkt(R"(<?\s*(POINT|LINESTRING|CIRCULARSTRING|COMPOUNDCURVE|CURVEPOLYGON|POLYGON|TRIANGLE|MULTIPOINT|MULTICURVE|MULTILINESTRING|MULTISURFACE|MULTIPOLYGON|POLYHEDRALSURFACE|TIN|GEOMETRYCOLLECTION)(\s+(Z|M|ZM))?\s*(\(|EMPTY)[\sa-zA-Z0-9()+\-.,>]*)", std::regex::nosubs | std::regex::icase);
+
+class TWKT
+{
+public:
+	int infer(const CellRaw& cell)
+	{
+		if (!m_valid)
+			return 0;
+		const std::string* sp = std::get_if<std::string>(&cell);
+		if (!sp)
+			return m_valid = false;
+		m_valid = std::regex_match(*sp, _re_is_wkt);
+		if (!m_valid || m_is_list)
+			return m_valid;
+		if (sp->front() == '<')
+			m_is_list = true;
+		else
+		{
+			int level = 0;
+			for (char c : *sp)
+				if (c == '(')
+				{
+					if (level < 0)
+					{
+						m_is_list = true;
+						break;
+					}
+					++level;
+				}
+				else if (c == ')' && --level == 0)
+					level = -1;
+		}
+		return true;
+	}
+
+	bool create_schema(IngestColumnDefinition& col) const
+	{
+		if (m_valid)
+		{
+			col.column_type = ColumnType::Geography;
+			col.format = "WKT";
+			col.list_levels = m_is_list;
+		}
+		return m_valid;
+	}
+
+	bool m_valid = true;
+	bool m_is_list = false;
+};
+
 template <class T>
 class infer_children
 {
@@ -1423,7 +1474,8 @@ public:
 		TDecimal,
 		TBytes,
 		TBytesBase64,
-		TDateTime
+		TDateTime,
+		TWKT
 	> m_types;
 	enum ValueTypes { ValueString = 1, ValueNumber = 2, ValueBool = 4, ValueSingle = 8, ValueObject = 16, ValueArray = 32 };
 	unsigned m_value_types = 0;
@@ -1534,57 +1586,6 @@ public:
 	bool m_is_geo = true;
 	JSONDispatcher m_json;
 	JSONInferValue m_value;
-};
-
-static const std::regex _re_is_wkt(R"(<?\s*(POINT|LINESTRING|CIRCULARSTRING|COMPOUNDCURVE|CURVEPOLYGON|POLYGON|TRIANGLE|MULTIPOINT|MULTICURVE|MULTILINESTRING|MULTISURFACE|MULTIPOLYGON|POLYHEDRALSURFACE|TIN|GEOMETRYCOLLECTION)(\s+(Z|M|ZM))?\s*(\(|EMPTY)[\sa-zA-Z0-9()+\-.,>]*)", std::regex::nosubs | std::regex::icase);
-
-class TWKT
-{
-public:
-	int infer(const CellRaw& cell)
-	{
-		if (!m_valid)
-			return 0;
-		const std::string* sp = std::get_if<std::string>(&cell);
-		if (!sp)
-			return m_valid = false;
-		m_valid = std::regex_match(*sp, _re_is_wkt);
-		if (!m_valid || m_is_list)
-			return m_valid;
-		if (sp->front() == '<')
-			m_is_list = true;
-		else
-		{
-			int level = 0;
-			for (char c : *sp)
-				if (c == '(')
-				{
-					if (level < 0)
-					{
-						m_is_list = true;
-						break;
-					}
-					++level;
-				}
-				else if (c == ')' && --level == 0)
-					level = -1;
-		}
-		return true;
-	}
-
-	bool create_schema(IngestColumnDefinition& col) const
-	{
-		if (m_valid)
-		{
-			col.column_type = ColumnType::Geography;
-			col.format = "WKT";
-			col.list_levels = m_is_list;
-		}
-		return m_valid;
-	}
-
-	bool m_valid = true;
-	bool m_is_list = false;
 };
 
 }

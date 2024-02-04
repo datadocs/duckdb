@@ -43,11 +43,11 @@ public:
 	virtual int get_percent_complete() override;
 	virtual size_t get_sheet_count() override;
 	virtual std::vector<std::string> get_sheet_names() override;
-	virtual bool select_sheet(const std::string& sheet_name) override;
+	virtual bool select_sheet(const std::string_view &sheet_name) override;
 	virtual bool select_sheet(size_t sheet_number) override;
 	virtual size_t get_file_count() override;
 	virtual std::vector<std::string> get_file_names() override;
-	virtual bool select_file(const std::string& file_name) override;
+	virtual bool select_file(const std::string_view &file_name) override;
 	virtual bool select_file(size_t file_number) override;
 
 	static ParserImpl* get_parser_from_reader(std::shared_ptr<BaseReader> reader);
