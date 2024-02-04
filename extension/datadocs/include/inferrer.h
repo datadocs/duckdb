@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <vector>
 #include <string>
+#include <string_view>
 #include <variant>
 
 #include "duckdb.hpp"
@@ -148,11 +149,11 @@ public:
 	virtual int get_percent_complete() = 0;
 	virtual size_t get_sheet_count() = 0;
 	virtual std::vector<std::string> get_sheet_names() = 0;
-	virtual bool select_sheet(const std::string& sheet_name) = 0;
+	virtual bool select_sheet(const std::string_view &sheet_name) = 0;
 	virtual bool select_sheet(size_t sheet_number) = 0;
 	virtual size_t get_file_count() = 0;
 	virtual std::vector<std::string> get_file_names() = 0;
-	virtual bool select_file(const std::string& file_name) = 0;
+	virtual bool select_file(const std::string_view &file_name) = 0;
 	virtual bool select_file(size_t file_number) = 0;
 public:
 	bool is_finished = false;
