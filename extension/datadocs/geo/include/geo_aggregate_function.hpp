@@ -17,19 +17,21 @@ double MS_PER_RADIAN = 6371.0088 * 1000;
 
 struct ClusterDBScanIncluded {
 	inline explicit ClusterDBScanIncluded(const ValidityMask &fmask_p, const ValidityMask &gmask_p,
-	                                      const ValidityMask &emask_p, const ValidityMask &mmask_p, idx_t bias_p)
-	    : fmask(fmask_p), gmask(gmask_p), emask(emask_p), mmask(mmask_p), bias(bias_p) {
+	                                      const ValidityMask &emask_p, const ValidityMask &mmask_p)
+	    : fmask(fmask_p), gmask(gmask_p), emask(emask_p), mmask(mmask_p) {
 	}
 
 	inline bool operator()(const idx_t &idx) const {
-		return fmask.RowIsValid(idx) && gmask.RowIsValid(idx - bias) && emask.RowIsValid(idx - bias) &&
-		       mmask.RowIsValid(idx - bias);
+		return fmask.RowIsValid(idx) && gmask.RowIsValid(idx) && emask.RowIsValid(idx) && mmask.RowIsValid(idx);
+	}
+
+	inline bool AllValid() const {
+		return fmask.AllValid() && gmask.AllValid() && emask.AllValid() && mmask.AllValid();
 	}
 	const ValidityMask &fmask;
 	const ValidityMask &gmask;
 	const ValidityMask &emask;
 	const ValidityMask &mmask;
-	const idx_t bias;
 };
 
 class GeoAggregateExecutor {
@@ -129,19 +131,20 @@ public:
 	}
 
 	template <class STATE, class A_TYPE, class B_TYPE, class C_TYPE, class RESULT_TYPE, class OP>
-	static void TernaryWindow(Vector &a, Vector &b, Vector &c, const ValidityMask &ifilter,
-	                          AggregateInputData &aggr_input_data, data_ptr_t state, const FrameBounds &frame,
-	                          const FrameBounds &prev, Vector &result, idx_t rid, idx_t bias) {
+	static void TernaryWindow(const Vector &a, const Vector &b, const Vector &c, const ValidityMask &ifilter,
+	                          AggregateInputData &aggr_input_data, data_ptr_t state_p, const SubFrames &frames,
+	                          Vector &result, idx_t ridx, const_data_ptr_t gstate_p) {
 
-		auto adata = FlatVector::GetData<const A_TYPE>(a) - bias;
+		auto adata = FlatVector::GetData<const A_TYPE>(a);
 		const auto &avalid = FlatVector::Validity(a);
-		auto bdata = FlatVector::GetData<const B_TYPE>(b) - bias;
+		auto bdata = FlatVector::GetData<const B_TYPE>(b);
 		const auto &bvalid = FlatVector::Validity(b);
-		auto cdata = FlatVector::GetData<const C_TYPE>(c) - bias;
+		auto cdata = FlatVector::GetData<const C_TYPE>(c);
 		const auto &cvalid = FlatVector::Validity(c);
-		OP::template Window<STATE, A_TYPE, B_TYPE, C_TYPE, RESULT_TYPE>(adata, bdata, cdata, ifilter, avalid, bvalid,
-		                                                                cvalid, aggr_input_data, (STATE *)state, frame,
-		                                                                prev, result, rid, bias);
+		auto &state = *reinterpret_cast<STATE *>(state_p);
+		auto gstate = reinterpret_cast<const STATE *>(gstate_p);
+		OP::template Window<STATE, A_TYPE, B_TYPE, C_TYPE, RESULT_TYPE>(
+		    adata, bdata, cdata, ifilter, avalid, bvalid, cvalid, aggr_input_data, state, frames, result, ridx, gstate);
 	}
 };
 
@@ -213,65 +216,70 @@ struct ClusterDBScanOperation {
 	template <class STATE, class A_TYPE, class B_TYPE, class C_TYPE, class RESULT_TYPE>
 	static void Window(const A_TYPE *adata, const B_TYPE *bdata, const C_TYPE *cdata, const ValidityMask &fmask,
 	                   const ValidityMask &amask, const ValidityMask &bmask, const ValidityMask &cmask,
-	                   AggregateInputData &aggr_input_data, STATE *state, const FrameBounds &frame,
-	                   const FrameBounds &prev, Vector &result, idx_t ridx, idx_t bias) {
-		ClusterDBScanIncluded include(fmask, amask, bmask, cmask, bias);
+	                   AggregateInputData &aggr_input_data, STATE &state, const SubFrames &frames, Vector &result,
+	                   idx_t ridx, const STATE *gstate) {
+		ClusterDBScanIncluded include(fmask, amask, bmask, cmask);
 
 		auto rdata = FlatVector::GetData<RESULT_TYPE>(result);
 		auto &rmask = FlatVector::Validity(result);
 		double epsilon = bdata[ridx] / MS_PER_RADIAN;
 		int minpoints = cdata[ridx];
-		if (!state->isset || frame.start != prev.start || frame.end != prev.end || state->epsilon != epsilon ||
-		    state->minpoints != minpoints) {
-			state->isset = true;
-			state->epsilon = epsilon;
-			state->minpoints = minpoints;
-			size_t asize = frame.end - frame.start;
-			std::vector<GSERIALIZED *> gserArray {};
-			std::vector<int> indexVec(asize, -1);
-			int idx = 0;
 
-			for (size_t i = frame.start; i < frame.end; i++) {
-				if (include(i)) {
-					auto gser = Geometry::GetGserialized(adata[i]);
-					if (!Geometry::IsEmpty(gser)) {
-						gserArray.push_back(gser);
-						indexVec[i - frame.start] = idx++;
-					} else {
-						Geometry::DestroyGeometry(gser);
+		FrameBounds prev;
+		for (const auto &frame : frames) {
+			if (!state.isset || frame.start != prev.start || frame.end != prev.end || state.epsilon != epsilon ||
+			    state.minpoints != minpoints) {
+				state.isset = true;
+				state.epsilon = epsilon;
+				state.minpoints = minpoints;
+				size_t asize = frame.end - frame.start;
+				std::vector<GSERIALIZED *> gserArray {};
+				std::vector<int> indexVec(asize, -1);
+				int idx = 0;
+
+				for (size_t i = frame.start; i < frame.end; i++) {
+					if (include(i)) {
+						auto gser = Geometry::GetGserialized(adata[i]);
+						if (!Geometry::IsEmpty(gser)) {
+							gserArray.push_back(gser);
+							indexVec[i - frame.start] = idx++;
+						} else {
+							Geometry::DestroyGeometry(gser);
+						}
 					}
 				}
-			}
 
-			// Doing cluster db scan
-			auto clusters = Geometry::GeometryClusterDBScan(&gserArray[0], gserArray.size(), epsilon, minpoints);
+				// Doing cluster db scan
+				auto clusters = Geometry::GeometryClusterDBScan(&gserArray[0], gserArray.size(), epsilon, minpoints);
 
-			state->clusters = {};
+				state.clusters = {};
 
-			for (idx_t i = 0; i < asize; i++) {
-				if (indexVec[i] == -1) {
-					state->clusters.push_back(-1);
+				for (idx_t i = 0; i < asize; i++) {
+					if (indexVec[i] == -1) {
+						state.clusters.push_back(-1);
+					} else {
+						state.clusters.push_back(clusters[indexVec[i]]);
+					}
+				}
+
+				// Free memory
+				for (idx_t child_idx = 0; child_idx < gserArray.size(); child_idx++) {
+					Geometry::DestroyGeometry(gserArray[child_idx]);
+				}
+
+				if (state.clusters[ridx - frame.start] == -1) {
+					rmask.SetInvalid(ridx);
 				} else {
-					state->clusters.push_back(clusters[indexVec[i]]);
+					rdata[ridx] = state.clusters[ridx - frame.start];
+				}
+			} else {
+				if (state.clusters[ridx - frame.start] == -1) {
+					rmask.SetInvalid(ridx);
+				} else {
+					rdata[ridx] = state.clusters[ridx - frame.start];
 				}
 			}
-
-			// Free memory
-			for (idx_t child_idx = 0; child_idx < gserArray.size(); child_idx++) {
-				Geometry::DestroyGeometry(gserArray[child_idx]);
-			}
-
-			if (state->clusters[ridx - frame.start] == -1) {
-				rmask.SetInvalid(ridx);
-			} else {
-				rdata[ridx] = state->clusters[ridx - frame.start];
-			}
-		} else {
-			if (state->clusters[ridx - frame.start] == -1) {
-				rmask.SetInvalid(ridx);
-			} else {
-				rdata[ridx] = state->clusters[ridx - frame.start];
-			}
+			prev = frame;
 		}
 	}
 
@@ -297,12 +305,13 @@ static void TernaryUpdate(Vector inputs[], AggregateInputData &aggr_input_data, 
 }
 
 template <class STATE, class A_TYPE, class B_TYPE, class C_TYPE, class RESULT_TYPE, class OP>
-static void TernaryWindow(Vector inputs[], const ValidityMask &filter_mask, AggregateInputData &aggr_input_data,
-                          idx_t input_count, data_ptr_t state, const FrameBounds &frame, const FrameBounds &prev,
-                          Vector &result, idx_t rid, idx_t bias) {
-	D_ASSERT(input_count == 3);
+static void TernaryWindow(AggregateInputData &aggr_input_data, const WindowPartitionInput &partition,
+                          const_data_ptr_t g_state, data_ptr_t l_state, const SubFrames &subframes, Vector &result,
+                          idx_t rid) {
+	D_ASSERT(partition.input_count == 3);
 	GeoAggregateExecutor::TernaryWindow<STATE, A_TYPE, B_TYPE, C_TYPE, RESULT_TYPE, OP>(
-	    inputs[0], inputs[1], inputs[2], filter_mask, aggr_input_data, state, frame, prev, result, rid, bias);
+	    partition.inputs[0], partition.inputs[1], partition.inputs[2], partition.filter_mask,
+		aggr_input_data, l_state, subframes, result, rid, g_state);
 }
 
 unique_ptr<FunctionData> BindGeometryClusterDBScan(ClientContext &context, AggregateFunction &function,
