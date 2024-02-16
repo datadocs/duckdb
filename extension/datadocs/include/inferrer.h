@@ -65,11 +65,11 @@ public:
 
 enum class ErrorCode { NoError = 0, TypeError = 1 };
 
-struct ErrorType
+struct InferrerErrorType
 {
 	ErrorCode error_code;
 	std::string value;
-	static const ErrorType NoErrorValue;
+	static const InferrerErrorType NoErrorValue;
 };
 
 enum ServiceColumns { COL_ROWNUM = -1 };

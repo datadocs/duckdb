@@ -174,7 +174,7 @@ double LWGEOM_x_point(GSERIALIZED *geom) {
 
 	if (gserialized_get_type(geom) != POINTTYPE) {
 		lwerror("Argument to ST_X() must have type POINT");
-		throw Exception("Argument to ST_X() must have type POINT");
+		throw Exception(ExceptionType::INVALID, "Argument to ST_X() must have type POINT");
 		return LW_FAILURE;
 	}
 
@@ -193,7 +193,7 @@ double LWGEOM_y_point(GSERIALIZED *geom) {
 
 	if (gserialized_get_type(geom) != POINTTYPE) {
 		lwerror("Argument to ST_Y() must have type POINT");
-		throw Exception("Argument to ST_Y() must have type POINT");
+		throw Exception(ExceptionType::INVALID, "Argument to ST_Y() must have type POINT");
 		return LW_FAILURE;
 	}
 

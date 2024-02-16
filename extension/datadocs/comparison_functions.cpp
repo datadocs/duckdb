@@ -1,8 +1,8 @@
 #include "datadocs.hpp"
 #include "datadocs_extension.hpp"
 #include "duckdb.hpp"
-#include "duckdb/common/serializer/format_deserializer.hpp"
-#include "duckdb/common/serializer/format_serializer.hpp"
+#include "duckdb/common/serializer/deserializer.hpp"
+#include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/core_functions/scalar/list_functions.hpp"
 #include "duckdb/function/scalar/string_functions.hpp"
 #include "duckdb/main/extension_util.hpp"
@@ -31,24 +31,15 @@ struct CompareListLambdaBindData : public FunctionData {
 public:
 	bool Equals(const FunctionData &other_p) const override;
 	unique_ptr<FunctionData> Copy() const override;
-	static void Serialize(FieldWriter &writer, const FunctionData *bind_data_p, const ScalarFunction &function) {
-		throw NotImplementedException("FIXME: list lambda serialize");
-	}
-	static unique_ptr<FunctionData> Deserialize(PlanDeserializationState &state, FieldReader &reader,
-	                                            ScalarFunction &bound_function) {
-		throw NotImplementedException("FIXME: list lambda deserialize");
-	}
-
-	static void FormatSerialize(FormatSerializer &serializer, const optional_ptr<FunctionData> bind_data_p,
-	                            const ScalarFunction &function) {
+	static void Serialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data_p,
+	                      const ScalarFunction &function) {
 		auto &bind_data = bind_data_p->Cast<CompareListLambdaBindData>();
 		serializer.WriteProperty(100, "stype", bind_data.stype);
-		serializer.WriteOptionalProperty(101, "lambda_expr", bind_data.lambda_expr);
+		serializer.WriteProperty(101, "lambda_expr", bind_data.lambda_expr);
 	}
-
-	static unique_ptr<FunctionData> FormatDeserialize(FormatDeserializer &deserializer, ScalarFunction &function) {
+	static unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, ScalarFunction &) {
 		auto stype = deserializer.ReadProperty<LogicalType>(100, "stype");
-		auto lambda_expr = deserializer.ReadOptionalProperty<unique_ptr<Expression>>(101, "lambda_expr");
+		auto lambda_expr = deserializer.ReadProperty<unique_ptr<Expression>>(101, "lambda_expr");
 		return make_uniq<CompareListLambdaBindData>(stype, std::move(lambda_expr));
 	}
 };
@@ -777,7 +768,7 @@ static void CompareAnyFunction(DataChunk &args, ExpressionState &state, Vector &
 
 	if (ci_vec.GetVectorType() != VectorType::CONSTANT_VECTOR ||
 	    keys_ci_vec.GetVectorType() != VectorType::CONSTANT_VECTOR) {
-		throw Exception("'ci' or 'keys_ci' must be constant!");
+		throw Exception(ExceptionType::INVALID, "'ci' or 'keys_ci' must be constant!");
 		return;
 	}
 
@@ -1083,12 +1074,12 @@ static void AnyInArrayFunction(DataChunk &args, ExpressionState &state, Vector &
 	// `ci` and `keys_ci` must be constant vectors
 	if (ci_vec.GetVectorType() != VectorType::CONSTANT_VECTOR ||
 	    keys_ci_vec.GetVectorType() != VectorType::CONSTANT_VECTOR) {
-		throw Exception("'ci' or 'keys_ci' must be constant!");
+		throw Exception(ExceptionType::INVALID, "'ci' or 'keys_ci' must be constant!");
 		return;
 	}
 
 	if (second_operand.GetType().id() != LogicalTypeId::LIST) {
-		throw Exception("Second parameter must be LIST!");
+		throw Exception(ExceptionType::INVALID, "Second parameter must be LIST!");
 		return;
 	}
 
@@ -1195,11 +1186,11 @@ unique_ptr<Expression> CreateListTransformToLower(ClientContext &context, unique
 static bool ComparisonBind(ClientContext &context, vector<unique_ptr<Expression>> &arguments, bool is_compare_any) {
 	// collect names and deconflict, construct return type
 	if (arguments.empty()) {
-		throw Exception("Can't compare nothing");
+		throw Exception(ExceptionType::INVALID, "Can't compare nothing");
 		return false;
 	}
 	if (arguments.size() < 2 || arguments.size() > 4) {
-		throw Exception("Can't compare invalid operands");
+		throw Exception(ExceptionType::INVALID, "Can't compare invalid operands");
 		return false;
 	}
 
@@ -1213,7 +1204,7 @@ static bool ComparisonBind(ClientContext &context, vector<unique_ptr<Expression>
 		} else if (alias == keys_ci_str) {
 			arguments_maps.insert(std::pair<ComparisonArgumentType, idx_t>(ComparisonArgumentType::keys_ci, i));
 		} else {
-			throw Exception("Argument key is invalid key");
+			throw Exception(ExceptionType::INVALID, "Argument key is invalid key");
 			return false;
 		}
 	}
@@ -1236,13 +1227,13 @@ static bool ComparisonBind(ClientContext &context, vector<unique_ptr<Expression>
 	if (arguments[2]->type == ExpressionType::OPERATOR_CAST) {
 		auto child = std::move(arguments[2]->Cast<BoundCastExpression>().child);
 		if (child->type != ExpressionType::VALUE_CONSTANT) {
-			throw Exception("'ci' must be constant!");
+			throw Exception(ExceptionType::INVALID, "'ci' must be constant!");
 		}
 		ci_value = child->Cast<BoundConstantExpression>().value.DefaultCastAs(arguments[2]->return_type);
 		arguments[2] = BoundCastExpression::AddCastToType(context, std::move(child), arguments[2]->return_type);
 	} else {
 		if (arguments[2]->type != ExpressionType::VALUE_CONSTANT) {
-			throw Exception("'ci' must be constant!");
+			throw Exception(ExceptionType::INVALID, "'ci' must be constant!");
 		}
 		ci_value = arguments[2]->Cast<BoundConstantExpression>().value;
 	}
@@ -1284,7 +1275,8 @@ static unique_ptr<FunctionData> CompareAnyBind(ClientContext &context, ScalarFun
 	auto type2 = arguments[1]->return_type;
 	if (type1 != type2) {
 		if ((type1.IsNumeric() && type2.IsNumeric()) || (TypeIncludeDate(type1) && TypeIncludeDate(type2))) {
-			auto input_type = BoundComparisonExpression::BindComparison(type1, type2);
+			auto input_type = LogicalType::ForceMaxLogicalType(type1, type2);
+			;
 			arguments[0] = BoundCastExpression::AddCastToType(context, std::move(arguments[0]), input_type,
 			                                                  input_type.id() == LogicalTypeId::ENUM);
 			arguments[1] = BoundCastExpression::AddCastToType(context, std::move(arguments[1]), input_type,
@@ -1312,13 +1304,13 @@ static unique_ptr<FunctionData> AnyInArrayBind(ClientContext &context, ScalarFun
 	auto type1 = arguments[0]->return_type;
 	auto type2 = arguments[1]->return_type;
 	if (type2.id() != LogicalTypeId::LIST) {
-		throw Exception("Second parameter must be LIST!");
+		throw Exception(ExceptionType::INVALID, "Second parameter must be LIST!");
 		return nullptr;
 	} else {
 		auto child_type2 = ListType::GetChildType(type2);
 		if ((type1.IsNumeric() && child_type2.IsNumeric()) ||
 		    (TypeIncludeDate(type1) && TypeIncludeDate(child_type2))) {
-			auto input_type = BoundComparisonExpression::BindComparison(type1, child_type2);
+			auto input_type = LogicalType::ForceMaxLogicalType(type1, child_type2);
 			arguments[0] = BoundCastExpression::AddCastToType(context, std::move(arguments[0]), input_type,
 			                                                  input_type.id() == LogicalTypeId::ENUM);
 			arguments[1] =
