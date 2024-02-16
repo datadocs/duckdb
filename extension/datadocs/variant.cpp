@@ -59,7 +59,7 @@ LogicalType DDGeoType;
 
 const LogicalType DefaultDecimalType = LogicalType::DECIMAL(18, 3);
 const LogicalType DDNumericType = LogicalType::DECIMAL(dd_numeric_width, dd_numeric_scale);
-const LogicalType DDJsonType = JSONCommon::JSONType();
+const LogicalType DDJsonType = LogicalType::JSON();
 const string VARIANT_TYPE_KEY = "__type";
 const string VARIANT_VALUE_KEY = "__value";
 const string VARIANT_INFO_KEY = "__info";
@@ -279,7 +279,7 @@ public:
 			}
 			break;
 		case LogicalTypeId::VARCHAR:
-			if (type->GetAlias() == JSONCommon::JSON_TYPE_NAME) {
+			if (type->GetAlias() == LogicalType::JSON_TYPE_NAME) {
 				type_name = is_list ? "JSON[]" : "JSON";
 				write_func = &VariantWriter::WriteJSON;
 			} else {
@@ -493,7 +493,7 @@ private:
 			return isList ? "NUMERIC[]" : "NUMERIC";
 		}
 		case LogicalTypeId::VARCHAR:
-			if (type.GetAlias() == JSONCommon::JSON_TYPE_NAME) {
+			if (type.GetAlias() == LogicalType::JSON_TYPE_NAME) {
 				return isList ? "JSON[]" : "JSON";
 			} else {
 				return isList ? "STRING[]" : "STRING";
@@ -1276,7 +1276,7 @@ bool VariantReadScalar(VectorWriter &result, yyjson_val *val, LogicalType type, 
 	}
 
 	case LogicalType::VARCHAR: {
-		if (type.GetAlias() == JSONCommon::JSON_TYPE_NAME) {
+		if (type.GetAlias() == LogicalType::JSON_TYPE_NAME) {
 			return is_list ? VariantReaderJSON().ReadList(result, val) : VariantReaderJSON().ReadScalar(result, val);
 		} else {
 			return is_list ? VariantReaderString().ReadList(result, val)
@@ -1450,7 +1450,7 @@ bool VariantWriteValue(VectorWriter &result, Value v) {
 			return VariantWriteDecimalValue<hugeint_t>(result, v);
 		}
 		default:
-			throw Exception("Physical type false!");
+			throw Exception(ExceptionType::INVALID, "Physical type false!");
 			break;
 		}
 	} break;
@@ -1501,7 +1501,7 @@ bool TryCastVariant(Vector source, Vector &result, idx_t &idx, CastParameters &p
 	switch (target.id()) {
 	case LogicalType::VARCHAR: {
 		string tempVal;
-		if (target.GetAlias() == JSONCommon::JSON_TYPE_NAME && source_type.GetAlias() == JSONCommon::JSON_TYPE_NAME) {
+		if (target.GetAlias() == LogicalType::JSON_TYPE_NAME && source_type.GetAlias() == LogicalType::JSON_TYPE_NAME) {
 			// Handle for JSON
 			tempVal = val.ToString();
 		} else if (source_type.id() == LogicalType::VARCHAR) {
@@ -1621,7 +1621,7 @@ struct VariantCasts {
 	                      vector<yyjson_val *> extra_infos) {
 		auto result_type = result.GetType();
 
-		if (JSONCommon::LogicalTypeIsJSON(result_type)) {
+		if (result_type.IsJSONType()) {
 			return TransformVariantToJSON(vals, alc, result, count);
 		}
 
@@ -3137,11 +3137,11 @@ static unique_ptr<FunctionData> SortHashBind(ClientContext &context, ScalarFunct
                                              vector<unique_ptr<Expression>> &arguments) {
 	// collect names and deconflict, construct return type
 	if (arguments.empty()) {
-		throw Exception("Can't sort hash nothing");
+		throw Exception(ExceptionType::INVALID, "Can't sort hash nothing");
 		return nullptr;
 	}
 	if (arguments.size() < 1 || arguments.size() > 3) {
-		throw Exception("Can't sort hash for invalid value");
+		throw Exception(ExceptionType::INVALID, "Can't sort hash for invalid value");
 		return nullptr;
 	}
 
@@ -3159,7 +3159,7 @@ static unique_ptr<FunctionData> SortHashBind(ClientContext &context, ScalarFunct
 		} else if (alias == keys_ci_str) {
 			arguments_maps.insert(std::pair<ComparisonArgumentType, idx_t>(ComparisonArgumentType::keys_ci, i));
 		} else {
-			throw Exception("Argument key is invalid key");
+			throw Exception(ExceptionType::INVALID, "Argument key is invalid key");
 			return nullptr;
 		}
 	}

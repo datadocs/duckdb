@@ -1,6 +1,6 @@
 #include "datadocs_extension.hpp"
 #include "duckdb.hpp"
-
+#include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/main/extension_util.hpp"
 #include "inferrer.h"
 #include "type_conv.h"

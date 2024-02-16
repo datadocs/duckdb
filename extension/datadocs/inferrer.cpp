@@ -53,7 +53,7 @@ namespace std
 
 namespace duckdb {
 
-const ErrorType ErrorType::NoErrorValue = {};
+const InferrerErrorType InferrerErrorType::NoErrorValue = {};
 	
 /* ========= merge with xls_common from master ========= */
 static const double pow_10[] =

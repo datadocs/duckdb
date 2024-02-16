@@ -6,6 +6,7 @@
 #include "duckdb/common/operator/add.hpp"
 #include "duckdb/common/operator/subtract.hpp"
 #include "duckdb/common/types/cast_helpers.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/function/function.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/function/scalar/operators.hpp"
@@ -424,7 +425,7 @@ static Value AddSubtractNumericOperator(Value left_val, Value right_val, bool is
 	Value new_left_val = left_val;
 	Value new_right_val = right_val;
 	if (left_type.IsNumeric() && right_type.IsNumeric() && left_type.id() != right_type.id()) {
-		LogicalType input_type = BoundComparisonExpression::BindComparison(left_type, right_type);
+		LogicalType input_type = LogicalType::ForceMaxLogicalType(left_type, right_type);
 		left_type = input_type;
 		right_type = input_type;
 		new_left_val = left_val.DefaultCastAs(input_type);
@@ -487,8 +488,8 @@ static Value AddAnyOperator(Value left_val, Value right_val) {
 			res = Value::DATE(AddOperator::Operation<date_t, int32_t, date_t>(left_val.GetValue<date_t>(),
 			                                                                  right_val.GetValue<int32_t>()));
 		} else if (right_type.id() == LogicalTypeId::INTERVAL) {
-			res = Value::DATE(AddOperator::Operation<date_t, interval_t, date_t>(left_val.GetValue<date_t>(),
-			                                                                     right_val.GetValue<interval_t>()));
+			res = Value::DATE(Timestamp::GetDate(AddOperator::Operation<date_t, interval_t, timestamp_t>(
+			    left_val.GetValue<date_t>(), right_val.GetValue<interval_t>())));
 		} else if (right_type.id() == LogicalTypeId::TIME) {
 			res = Value::TIMESTAMP(AddOperator::Operation<date_t, dtime_t, timestamp_t>(left_val.GetValue<date_t>(),
 			                                                                            right_val.GetValue<dtime_t>()));
@@ -508,8 +509,8 @@ static Value AddAnyOperator(Value left_val, Value right_val) {
 			res = Value::INTERVAL(AddOperator::Operation<interval_t, interval_t, interval_t>(
 			    left_val.GetValue<interval_t>(), right_val.GetValue<interval_t>()));
 		} else if (right_type.id() == LogicalTypeId::DATE) {
-			res = Value::DATE(AddOperator::Operation<interval_t, date_t, date_t>(left_val.GetValue<interval_t>(),
-			                                                                     right_val.GetValue<date_t>()));
+			res = Value::DATE(Timestamp::GetDate(AddOperator::Operation<interval_t, date_t, timestamp_t>(
+			    left_val.GetValue<interval_t>(), right_val.GetValue<date_t>())));
 		} else if (right_type.id() == LogicalTypeId::TIME) {
 			return Value::TIME(AddTimeOperator::Operation<interval_t, dtime_t, dtime_t>(left_val.GetValue<interval_t>(),
 			                                                                            right_val.GetValue<dtime_t>()));
@@ -573,8 +574,8 @@ static Value SubtractAnyOperator(Value left_val, Value right_val) {
 			res = Value::DATE(SubtractOperator::Operation<date_t, int32_t, date_t>(left_val.GetValue<date_t>(),
 			                                                                       right_val.GetValue<int32_t>()));
 		} else if (right_type.id() == LogicalTypeId::INTERVAL) {
-			res = Value::DATE(SubtractOperator::Operation<date_t, interval_t, date_t>(
-			    left_val.GetValue<date_t>(), right_val.GetValue<interval_t>()));
+			res = Value::DATE(Timestamp::GetDate(SubtractOperator::Operation<date_t, interval_t, timestamp_t>(
+			    left_val.GetValue<date_t>(), right_val.GetValue<interval_t>())));
 		}
 		break;
 	case LogicalTypeId::TIMESTAMP:
@@ -731,7 +732,7 @@ static Value BitwiseAnyOperator(OperatorType op_type, Value left_val, Value righ
 		Value new_left_val = left_val;
 		Value new_right_val = right_val;
 		if (left_type != right_type) {
-			input_type = BoundComparisonExpression::BindComparison(left_type, right_type);
+			input_type = LogicalType::ForceMaxLogicalType(left_type, right_type);
 			new_left_val = left_val.DefaultCastAs(input_type);
 			new_right_val = right_val.DefaultCastAs(input_type);
 		}
@@ -949,7 +950,7 @@ static void BinaryOpAnyFunction(DataChunk &args, ExpressionState &state, Vector 
 	auto operators = UnifiedVectorFormat::GetData<string_t>(operator_data);
 
 	if (operator_vec.GetVectorType() != VectorType::CONSTANT_VECTOR) {
-		throw Exception("Operator must be constant!");
+		throw Exception(ExceptionType::INVALID, "Operator must be constant!");
 	}
 
 	OperatorType op_type = OperatorType::INVALID;
@@ -1010,7 +1011,7 @@ static void UnaryOpAnyFunction(DataChunk &args, ExpressionState &state, Vector &
 	auto operators = UnifiedVectorFormat::GetData<string_t>(operator_data);
 
 	if (operator_vec.GetVectorType() != VectorType::CONSTANT_VECTOR) {
-		throw Exception("Operator must be constant!");
+		throw Exception(ExceptionType::INVALID, "Operator must be constant!");
 	}
 
 	OperatorType op_type = OperatorType::INVALID;
@@ -1063,7 +1064,7 @@ static scalar_function_t GetScalarDecimalBinaryFunction(PhysicalType type) {
 		function = &ScalarFunction::BinaryFunction<int64_t, int64_t, int64_t, OP>;
 		break;
 	default:
-		throw Exception("Invalid Physical type for GetScalarDecimalBinaryFunction");
+		throw Exception(ExceptionType::INVALID, "Invalid Physical type for GetScalarDecimalBinaryFunction");
 		break;
 	}
 	return function;
@@ -1121,12 +1122,12 @@ unique_ptr<Expression> CreateBoundAddSubtractFuncExpression(ClientContext &conte
 unique_ptr<Expression> CreateBoundOperatorFuncExpression(ClientContext &context, vector<LogicalType> types,
                                                          vector<unique_ptr<Expression>> &func_arguments,
                                                          string function_name) {
-	QueryErrorContext error_context(nullptr, 0);
-	auto &func = Catalog::GetSystemCatalog(context).GetEntry<ScalarFunctionCatalogEntry>(context, DEFAULT_SCHEMA,
-	                                                                                     function_name, error_context);
+	QueryErrorContext error_context();
+	auto &func =
+	    Catalog::GetSystemCatalog(context).GetEntry<ScalarFunctionCatalogEntry>(context, DEFAULT_SCHEMA, function_name);
 	D_ASSERT(func.type == CatalogType::SCALAR_FUNCTION_ENTRY);
-	string error;
 
+	ErrorData error;
 	FunctionBinder function_binder(context);
 	const idx_t best_function = function_binder.BindFunction(func.name, func.functions, types, error);
 	if (best_function == DConstants::INVALID_INDEX) {
@@ -1135,10 +1136,11 @@ unique_ptr<Expression> CreateBoundOperatorFuncExpression(ClientContext &context,
 		for (auto &f : func.functions.functions) {
 			candidate_str += "\t" + f.ToString() + "\n";
 		}
-		error = StringUtil::Format("No function matches the given name and argument types '%s'. You might need to add "
-		                           "explicit type casts.\n\tCandidate functions:\n%s",
-		                           call_str, candidate_str);
-		throw BinderException(error);
+		string str_error =
+		    StringUtil::Format("No function matches the given name and argument types '%s'. You might need to add "
+		                       "explicit type casts.\n\tCandidate functions:\n%s",
+		                       call_str, candidate_str);
+		throw BinderException(str_error);
 		return nullptr;
 	}
 	auto bound_function = func.functions.GetFunctionByOffset(best_function);
@@ -1195,16 +1197,16 @@ unique_ptr<Expression> CreateBoundUnaryOperatorFuncExpression(ClientContext &con
 static unique_ptr<FunctionData> BinaryOpAnyBind(ClientContext &context, ScalarFunction &bound_function,
                                                 vector<unique_ptr<Expression>> &arguments) {
 	if (arguments.size() != 3) {
-		throw Exception("Arguments size must be 3!");
+		throw Exception(ExceptionType::INVALID, "Arguments size must be 3!");
 		return nullptr;
 	}
 	if (arguments[0]->type != ExpressionType::VALUE_CONSTANT) {
-		throw Exception("Operator must be constant!");
+		throw Exception(ExceptionType::INVALID, "Operator must be constant!");
 		return nullptr;
 	}
 	auto &bound_const_expr = arguments[0]->Cast<BoundConstantExpression>();
 	if (bound_const_expr.return_type != LogicalType::VARCHAR) {
-		throw Exception("Operator must be string!");
+		throw Exception(ExceptionType::INVALID, "Operator must be string!");
 		return nullptr;
 	}
 	string_t str_val = bound_const_expr.value.GetValueUnsafe<string_t>();
@@ -1215,7 +1217,7 @@ static unique_ptr<FunctionData> BinaryOpAnyBind(ClientContext &context, ScalarFu
 	LogicalType right_type = arguments[2]->return_type;
 	// Cast numeric function to same types
 	if (left_type.IsNumeric() && right_type.IsNumeric() && left_type.id() != right_type.id()) {
-		auto input_type = BoundComparisonExpression::BindComparison(left_type, right_type);
+		auto input_type = LogicalType::ForceMaxLogicalType(left_type, right_type);
 		arguments[1] = BoundCastExpression::AddCastToType(context, std::move(arguments[1]), input_type,
 		                                                  input_type.id() == LogicalTypeId::ENUM);
 		arguments[2] = BoundCastExpression::AddCastToType(context, std::move(arguments[2]), input_type,
@@ -1300,16 +1302,16 @@ static unique_ptr<FunctionData> BinaryOpAnyBind(ClientContext &context, ScalarFu
 static unique_ptr<FunctionData> UnaryOpAnyBind(ClientContext &context, ScalarFunction &bound_function,
                                                vector<unique_ptr<Expression>> &arguments) {
 	if (arguments.size() != 2) {
-		throw Exception("Arguments size must be 2!");
+		throw Exception(ExceptionType::INVALID, "Arguments size must be 2!");
 		return nullptr;
 	}
 	if (arguments[0]->type != ExpressionType::VALUE_CONSTANT) {
-		throw Exception("Operator must be constant!");
+		throw Exception(ExceptionType::INVALID, "Operator must be constant!");
 		return nullptr;
 	}
 	auto &bound_const_expr = arguments[0]->Cast<BoundConstantExpression>();
 	if (bound_const_expr.return_type != LogicalType::VARCHAR) {
-		throw Exception("Operator must be string!");
+		throw Exception(ExceptionType::INVALID, "Operator must be string!");
 		return nullptr;
 	}
 	string_t str_val = bound_const_expr.value.GetValueUnsafe<string_t>();

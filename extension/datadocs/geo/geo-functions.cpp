@@ -1,17 +1,17 @@
 #include "geo-functions.hpp"
 
+#include "duckdb/common/exception/conversion_exception.hpp"
 #include "duckdb/common/types/vector.hpp"
 #include "duckdb/common/vector_operations/generic_executor.hpp"
 #include "geometry.hpp"
 
 #if defined(_MSC_VER)
 #include <windows.h>
-void usleep(__int64 usec) 
-{ 
+void usleep(__int64 usec) {
 	HANDLE timer;
 	LARGE_INTEGER ft;
 
-	ft.QuadPart = -(10*usec);
+	ft.QuadPart = -(10 * usec);
 
 	timer = CreateWaitableTimer(NULL, TRUE, NULL);
 	SetWaitableTimer(timer, &ft, 0, NULL, NULL, 0);
@@ -24,13 +24,13 @@ void usleep(__int64 usec)
 
 namespace duckdb {
 int loopindex = 1;
-std::vector<int> queue {};
+std::vector<int> geoqueue {};
 
 bool GeoFunctions::CastVarcharToGEO(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
 	int currindex = loopindex;
-	queue.push_back(currindex);
+	geoqueue.push_back(currindex);
 	loopindex++;
-	while (queue.size() > 0 && queue[0] != currindex) {
+	while (geoqueue.size() > 0 && geoqueue[0] != currindex) {
 		usleep(30);
 	}
 	bool success = true;
@@ -52,11 +52,11 @@ bool GeoFunctions::CastVarcharToGEO(Vector &source, Vector &result, idx_t count,
 			    return string_t((const char *)base, size);
 		    });
 	} catch (const std::exception &e) {
-		queue.erase(queue.begin());
-		throw Exception(e.what());
+		geoqueue.erase(geoqueue.begin());
+		throw Exception(ExceptionType::INVALID, e.what());
 		return false;
 	}
-	queue.erase(queue.begin());
+	geoqueue.erase(geoqueue.begin());
 	return success;
 }
 
@@ -809,9 +809,9 @@ static void GeometryFromTextBinaryExecutor(Vector &text, Vector &srid, Vector &r
 
 void GeoFunctions::GeometryFromTextFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	int currindex = loopindex;
-	queue.push_back(currindex);
+	geoqueue.push_back(currindex);
 	loopindex++;
-	while (queue.size() > 0 && queue[0] != currindex) {
+	while (geoqueue.size() > 0 && geoqueue[0] != currindex) {
 		usleep(30);
 	}
 	try {
@@ -823,11 +823,11 @@ void GeoFunctions::GeometryFromTextFunction(DataChunk &args, ExpressionState &st
 			GeometryFromTextBinaryExecutor<string_t, int32_t, string_t>(text_arg, srid_arg, result, args.size());
 		}
 	} catch (const std::exception &e) {
-		queue.erase(queue.begin());
-		throw Exception(e.what());
+		geoqueue.erase(geoqueue.begin());
+		throw Exception(ExceptionType::INVALID, std::string(e.what()));
 		return;
 	}
-	queue.erase(queue.begin());
+	geoqueue.erase(geoqueue.begin());
 }
 
 struct FromWKBUnaryOperator {
