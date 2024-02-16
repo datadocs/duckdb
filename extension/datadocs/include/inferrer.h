@@ -63,11 +63,11 @@ public:
 	using base::operator =;
 };
 
-enum class ErrorCode { NoError = 0, TypeError = 1 };
+enum class InferrerErrorCode { NoError = 0, TypeError = 1 };
 
 struct InferrerErrorType
 {
-	ErrorCode error_code;
+	InferrerErrorCode error_code;
 	std::string value;
 	static const InferrerErrorType NoErrorValue;
 };
