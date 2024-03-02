@@ -84,7 +84,7 @@ class XMLList : public XMLValueBase, public IngestColBase
 {
 public:
 	XMLList(const IngestColumnDefinition &col, idx_t &parent_cur_row)
-	    : XMLValueBase(this), IngestColBase(col.column_name, parent_cur_row), buffer(nullptr), column(BuildColumn(col, cur_row)) {
+	    : XMLValueBase(this), IngestColBase(col.name, parent_cur_row), buffer(nullptr), column(BuildColumn(col, cur_row)) {
 	}
 
 	virtual void SetVector(Vector *new_vec) noexcept override {
@@ -127,7 +127,7 @@ private:
 class XMLStruct : public XMLValueBase, public IngestColBase
 {
 public:
-	XMLStruct(const IngestColumnDefinition &col, idx_t &cur_row) : XMLValueBase(this), IngestColBase(col.column_name, cur_row) {
+	XMLStruct(const IngestColumnDefinition &col, idx_t &cur_row) : XMLValueBase(this), IngestColBase(col.name, cur_row) {
 		XMLBuildColumns(col.fields, m_children.keys, m_columns, cur_row);
 	}
 
@@ -209,7 +209,7 @@ class XMLListStruct : public XMLValueBase, public IngestColBase
 {
 public:
 	XMLListStruct(const IngestColumnDefinition &col, idx_t &parent_cur_row)
-	    : XMLValueBase(this), IngestColBase(col.column_name, parent_cur_row), buffer(nullptr), column(col, cur_row) {
+	    : XMLValueBase(this), IngestColBase(col.name, parent_cur_row), buffer(nullptr), column(col, cur_row) {
 	}
 
 	virtual void SetVector(Vector *new_vec) noexcept override {
@@ -262,7 +262,7 @@ public:
 	XMLTopStruct(XMLRoot *root) : XMLStruct(cur_row), raw_parser(nullptr), col_row_number("__rownum__", cur_row), handler(root) {}
 
 	void BuildColumns(const Schema &schema) {
-		XMLBuildColumns(schema.columns, m_children.keys, m_columns, cur_row);
+		XMLBuildColumns(schema.fields, m_children.keys, m_columns, cur_row);
 	}
 
 	void BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) {
@@ -360,34 +360,31 @@ XMLValueBase *XMLBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row) 
 		return new XMLList(col, cur_row);
 	}
 	switch(col.column_type) {
-	case ColumnType::String: return new XMLCol<IngestColVARCHAR>(col.column_name, cur_row);
-	case ColumnType::Boolean: return new XMLCol<IngestColBOOLEAN>(col.column_name, cur_row);
-	case ColumnType::Integer: return new XMLCol<IngestColBIGINT>(col.column_name, cur_row);
-	case ColumnType::Decimal: return new XMLCol<IngestColDOUBLE>(col.column_name, cur_row);
-	case ColumnType::Date: return new XMLCol<IngestColDATE>(col.column_name, cur_row, col.format);
-	case ColumnType::Time: return new XMLCol<IngestColTIME>(col.column_name, cur_row, col.format);
-	case ColumnType::Datetime: return new XMLCol<IngestColTIMESTAMP>(col.column_name, cur_row, col.format);
+	case ColumnType::String: return new XMLCol<IngestColVARCHAR>(col.name, cur_row);
+	case ColumnType::Boolean: return new XMLCol<IngestColBOOLEAN>(col.name, cur_row);
+	case ColumnType::Integer: return new XMLCol<IngestColBIGINT>(col.name, cur_row);
+	case ColumnType::Decimal: return new XMLCol<IngestColDOUBLE>(col.name, cur_row);
+	case ColumnType::Date: return new XMLCol<IngestColDATE>(col.name, cur_row, col.format);
+	case ColumnType::Time: return new XMLCol<IngestColTIME>(col.name, cur_row, col.format);
+	case ColumnType::Datetime: return new XMLCol<IngestColTIMESTAMP>(col.name, cur_row, col.format);
 	case ColumnType::Bytes:
 		if (col.format == "base64") {
-			return new XMLCol<IngestColBLOBBase64>(col.column_name, cur_row);
+			return new XMLCol<IngestColBLOBBase64>(col.name, cur_row);
 		}
-		return new XMLCol<IngestColBLOBHex>(col.column_name, cur_row);
-	case ColumnType::Numeric: return new XMLCol<IngestColNUMERIC>(col.column_name, cur_row, col.i_digits, col.f_digits);
-	case ColumnType::Geography: return new XMLCol<IngestColGEO>(col.column_name, cur_row);
+		return new XMLCol<IngestColBLOBHex>(col.name, cur_row);
+	case ColumnType::Numeric: return new XMLCol<IngestColNUMERIC>(col.name, cur_row, col.i_digits, col.f_digits);
+	case ColumnType::Geography: return new XMLCol<IngestColGEO>(col.name, cur_row);
 	case ColumnType::Struct: return new XMLStruct(col, cur_row);
 	default:
 		D_ASSERT(false);
-		return new XMLCol<IngestColBase>(col.column_name, cur_row);
+		return new XMLCol<IngestColBase>(col.name, cur_row);
 	}
 }
 
 static void XMLBuildColumns(const std::vector<IngestColumnDefinition> &fields, std::unordered_map<string, size_t> &keys,
     std::vector<std::unique_ptr<XMLValueBase>> &columns, idx_t &cur_row) {
 	for (const auto &col : fields) {
-		if (col.index < 0) {
-			continue;
-		}
-		keys.emplace(col.column_name, columns.size());
+		keys.emplace(col.name, columns.size());
 		columns.push_back(std::unique_ptr<XMLValueBase>(XMLBuildColumn(col, cur_row)));
 	}
 }

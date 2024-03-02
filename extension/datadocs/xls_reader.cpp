@@ -30,7 +30,7 @@ XLParser<TWorkBook>::~XLParser()
 template<class TWorkBook>
 bool XLParser<TWorkBook>::do_infer_schema()
 {
-	m_schema.columns.clear();
+	m_schema.fields.clear();
 	if (!open())
 		return false;
 	m_schema.header_row = -1;

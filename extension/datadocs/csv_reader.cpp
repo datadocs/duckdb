@@ -193,7 +193,7 @@ CSVParser::~CSVParser()
 
 bool CSVParser::do_infer_schema()
 {
-	m_schema.columns.clear();
+	m_schema.fields.clear();
 	if (!m_reader->open())
 		return false;
 	std::string sample(SAMPLE_SIZE, '\0');
@@ -432,37 +432,42 @@ bool CSVParser::is_newline(char c)
 
 void CSVParser::write_value(size_t i_col) {
 	bool remove_null_strings = m_schema.remove_null_strings;
+	IngestColBase *col;
 	if (i_col >= m_columns.size() - 1) {
 		if (is_inferring) {
-			i_col = 0;
+			col = m_columns[0].get();
 			remove_null_strings = false;
 		} else {
-			tmp_string.clear();
-			return;
+			col = nullptr;
 		}
+	} else {
+		col = m_columns[i_col].get();
 	}
-	string_t s = tmp_string.empty() ? string_t(value_start, value_end - value_start) : tmp_string.AppendChunk(value_start, value_end);
-	auto utf_type = Utf8Proc::Analyze(s.GetData(), s.GetSize());
-	if (utf_type == UnicodeType::INVALID) {
-		throw InvalidInputException("Invalid unicode");
-	}
-	if (remove_null_strings && (s.GetSize() == 0 || s == "NULL" || s == "null") || !m_columns[i_col]->Write(s)) {
-		m_columns[i_col]->WriteNull();
+	if (col) {
+		string_t s = tmp_string.empty() ? string_t(value_start, value_end - value_start) : tmp_string.AppendChunk(value_start, value_end);
+		auto utf_type = Utf8Proc::Analyze(s.GetData(), s.GetSize());
+		if (utf_type == UnicodeType::INVALID) {
+			throw InvalidInputException("Invalid unicode");
+		}
+		if (remove_null_strings && (s.GetSize() == 0 || s == "NULL" || s == "null") || !col->Write(s)) {
+			col->WriteNull();
+		}
 	}
 	tmp_string.clear();
 }
 
 idx_t CSVParser::FillChunk(DataChunk &output) {
 	size_t n_columns = m_columns.size();
-	D_ASSERT(output.data.size() == n_columns);
-	for (size_t i = 0; i < n_columns; ++i) {
-		m_columns[i]->SetVector(&output.data[i]);
+	size_t i_col = 0;
+	for (auto &col : m_columns) {
+		if (col) {
+			col->SetVector(&output.data[i_col++]);
+		}
 	}
+	D_ASSERT(output.data.size() == i_col);
 	--n_columns; // last column is row number
 
 	cur_row = 0;
-	size_t i_col;
-
 	while (cur < end || underflow()) {
 		i_col = 0;
 		if (!m_schema.comment.empty() && *cur == m_schema.comment[0]) {
@@ -673,8 +678,11 @@ idx_t CSVParser::FillChunk(DataChunk &output) {
 
 	state_row_end_quoted:
 		write_value(i_col++);
-		while (i_col < n_columns)
-			m_columns[i_col++]->WriteNull();
+		for (; i_col < n_columns; ++i_col) {
+			if (m_columns[i_col]) {
+				m_columns[i_col]->WriteNull();
+			}
+		}
 		m_columns.back()->Write((int64_t)++m_row_number);
 		if (++cur_row >= STANDARD_VECTOR_SIZE) {
 			return cur_row;
@@ -692,9 +700,9 @@ WKTParser::WKTParser(std::shared_ptr<BaseReader> reader) :
 	m_schema.delimiter = '\0';
 	m_schema.quote_char = '\0';
 	m_schema.newline = "\n";
-	m_schema.columns.clear();
+	m_schema.fields.clear();
 	m_schema.charset = "ASCII";
-	m_schema.columns.push_back({ "geometry", ColumnType::Geography, 0, false });
+	m_schema.fields.push_back({ "geometry", ColumnType::Geography, 1 });
 }
 
 }

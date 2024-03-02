@@ -5,7 +5,8 @@
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
-#include "inferrer.h"
+#include "json_common.hpp"
+#include "inferrer_impl.h"
 
 namespace duckdb {
 
@@ -14,14 +15,9 @@ namespace {
 struct IngestBindData : public TableFunctionData {
 	explicit IngestBindData(const string &file_name, ClientContext &context)
 	    : parser(Parser::get_parser(file_name, context)) {
-		parser->select_file(0);
 	}
 
 	void BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) {
-		if (!parser->infer_schema()) {
-			throw InvalidInputException("Cannot ingest file");
-		}
-		parser->BuildColumns();
 		parser->BindSchema(return_types, names);
 	}
 
@@ -35,7 +31,28 @@ static unique_ptr<FunctionData> IngestBind(ClientContext &context, TableFunction
 	}
 	const string &file_name = StringValue::Get(input.inputs[0]);
 	auto result = make_uniq<IngestBindData>(file_name, context);
-	result->BindSchema(return_types, names);
+	Parser &parser = *result->parser;
+	if (input.inputs.size() > 1) {
+		JSONAllocator alc {Allocator::DefaultAllocator()};
+		auto doc = JSONCommon::ReadDocument(StringValue::Get(input.inputs[1]), JSONCommon::READ_FLAG, alc.GetYYAlc());
+		auto root = yyjson_doc_get_root(doc);
+		yyjson_val *val = yyjson_obj_get(root, "path");
+		if (yyjson_is_str(val)) {
+			parser.select_path(std::string_view(unsafe_yyjson_get_str(val), unsafe_yyjson_get_len(val)));
+		} else if (yyjson_is_arr(val)) {
+			parser.select_path(val);
+		}
+		parser.get_schema()->FromJson(root); //yyjson_obj_get(root, "options"));
+	} else {
+		while (parser.get_file_count() > 0) {
+			parser.select_file(0);
+		}
+		if (!parser.infer_schema()) {
+			throw InvalidInputException("Cannot ingest file");
+		}
+	}
+	parser.BuildColumns();
+	parser.BindSchema(return_types, names);
 	return std::move(result);
 }
 
@@ -87,8 +104,10 @@ unique_ptr<TableRef> ReadIngestReplacement(ClientContext &context, const string 
 } // namespace
 
 void DatadocsExtension::LoadIngest(DatabaseInstance &inst) {
-	ExtensionUtil::RegisterFunction(
-	    inst, TableFunction("ingest_file", {LogicalType::VARCHAR}, IngestImpl, IngestBind, IngestInit));
+	TableFunctionSet ingest_set("ingest_file");
+	ingest_set.AddFunction(TableFunction({LogicalType::VARCHAR}, IngestImpl, IngestBind, IngestInit));
+	ingest_set.AddFunction(TableFunction({LogicalType::VARCHAR, DDJsonType}, IngestImpl, IngestBind, IngestInit));
+	ExtensionUtil::RegisterFunction(inst, ingest_set);
 
 	auto &config = DBConfig::GetConfig(inst);
 	config.replacement_scans.emplace(config.replacement_scans.begin(), ReadIngestReplacement);
