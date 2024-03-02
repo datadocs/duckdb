@@ -6,9 +6,12 @@
 #include <vector>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <variant>
 
 #include "duckdb.hpp"
+
+struct yyjson_val;
 
 namespace duckdb {
 
@@ -72,18 +75,17 @@ struct InferrerErrorType
 	static const InferrerErrorType NoErrorValue;
 };
 
-enum ServiceColumns { COL_ROWNUM = -1 };
+// enum ServiceColumns { COL_ROWNUM = -1 };
 
 struct IngestColumnDefinition
 {
-	std::string column_name;
+	std::string name;
 	ColumnType column_type;
-	int index; // source column
+	int index; // source column 1-based
 	int list_levels;
 	std::string format; // datetime format string
 	double bytes_per_value; // estimate for strings
 	bool is_json;
-	int dest_index; // for nested Struct columns this is output column
 	uint8_t i_digits;
 	uint8_t f_digits;
 	std::vector<IngestColumnDefinition> fields; // nested columns for Struct type
@@ -91,15 +93,19 @@ struct IngestColumnDefinition
 
 enum SchemaStatus { STATUS_OK = 0, STATUS_INVALID_FILE = 1 };
 
+class StructJsonMap;
+
 class Schema
 {
 public:
-	std::vector<IngestColumnDefinition> columns;
+	std::vector<IngestColumnDefinition> fields;
 	SchemaStatus status = STATUS_OK;
 	bool remove_null_strings = true; // "NULL" and "null" strings signify null values
 	bool has_truncated_string = false; // if a string longer than allowed limit was truncated
 	size_t nrows = 0; // estimated number of rows to reserve memory for
 	virtual ~Schema() = default;
+	virtual const StructJsonMap *GetJsonMap();
+	void FromJson(yyjson_val *json);
 };
 
 class CSVSchema : public Schema
@@ -115,6 +121,7 @@ public:
 	size_t first_data_row; // 1-based ignoring empty text rows
 	size_t comment_lines_skipped_in_parsing = 0;
 	virtual ~CSVSchema() = default;
+	virtual const StructJsonMap *GetJsonMap() override;
 };
 
 class XLSSchema : public Schema
@@ -125,6 +132,7 @@ public:
 	size_t first_data_row;
 	size_t comment_lines_skipped_in_parsing = 0;
 	virtual ~XLSSchema() = default;
+	virtual const StructJsonMap *GetJsonMap() override;
 };
 
 class JSONSchema : public Schema
@@ -132,6 +140,7 @@ class JSONSchema : public Schema
 public:
 	std::vector<std::string> start_path;
 	virtual ~JSONSchema() = default;
+	virtual const StructJsonMap *GetJsonMap() override;
 };
 
 class Parser
@@ -155,6 +164,8 @@ public:
 	virtual std::vector<std::string> get_file_names() = 0;
 	virtual bool select_file(const std::string_view &file_name) = 0;
 	virtual bool select_file(size_t file_number) = 0;
+	bool select_path(const std::string_view &path);
+	bool select_path(yyjson_val *path);
 public:
 	bool is_finished = false;
 };
