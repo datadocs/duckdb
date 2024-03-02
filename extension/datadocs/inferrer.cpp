@@ -267,23 +267,23 @@ bool ParserImpl::open()
 
 IngestColBase* BuildColumn(const IngestColumnDefinition &col, idx_t &cur_row) {
 	switch(col.column_type) {
-	case ColumnType::String: return new IngestColVARCHAR(col.column_name, cur_row);
-	case ColumnType::Boolean: return new IngestColBOOLEAN(col.column_name, cur_row);
-	case ColumnType::Integer: return new IngestColBIGINT(col.column_name, cur_row);
-	case ColumnType::Decimal: return new IngestColDOUBLE(col.column_name, cur_row);
-	case ColumnType::Date: return new IngestColDATE(col.column_name, cur_row, col.format);
-	case ColumnType::Time: return new IngestColTIME(col.column_name, cur_row, col.format);
-	case ColumnType::Datetime: return new IngestColTIMESTAMP(col.column_name, cur_row, col.format);
+	case ColumnType::String: return new IngestColVARCHAR(col.name, cur_row);
+	case ColumnType::Boolean: return new IngestColBOOLEAN(col.name, cur_row);
+	case ColumnType::Integer: return new IngestColBIGINT(col.name, cur_row);
+	case ColumnType::Decimal: return new IngestColDOUBLE(col.name, cur_row);
+	case ColumnType::Date: return new IngestColDATE(col.name, cur_row, col.format);
+	case ColumnType::Time: return new IngestColTIME(col.name, cur_row, col.format);
+	case ColumnType::Datetime: return new IngestColTIMESTAMP(col.name, cur_row, col.format);
 	case ColumnType::Bytes:
 		if (col.format == "base64") {
-			return new IngestColBLOBBase64(col.column_name, cur_row);
+			return new IngestColBLOBBase64(col.name, cur_row);
 		}
-		return new IngestColBLOBHex(col.column_name, cur_row);
-	case ColumnType::Numeric: return new IngestColNUMERIC(col.column_name, cur_row, col.i_digits, col.f_digits);
-	case ColumnType::Geography: return new IngestColGEO(col.column_name, cur_row);
+		return new IngestColBLOBHex(col.name, cur_row);
+	case ColumnType::Numeric: return new IngestColNUMERIC(col.name, cur_row, col.i_digits, col.f_digits);
+	case ColumnType::Geography: return new IngestColGEO(col.name, cur_row);
 	default:
 		D_ASSERT(false);
-		return new IngestColBase(col.column_name, cur_row);
+		return new IngestColBase(col.name, cur_row);
 	}
 }
 
@@ -292,7 +292,7 @@ public:
 	using IngestColBase::Write;
 
 	IngestColList(const IngestColumnDefinition &col, idx_t &cur_row)
-	    : IngestColBase(col.column_name, cur_row), buffer(nullptr), child(BuildColumn(col, list_row)) {
+	    : IngestColBase(col.name, cur_row), buffer(nullptr), child(BuildColumn(col, list_row)) {
 	}
 	virtual void SetVector(Vector *new_vec) noexcept override {
 		IngestColBase::SetVector(new_vec);
@@ -365,7 +365,7 @@ public:
 	using IngestColBase::Write;
 
 	IngestColWKTList(const IngestColumnDefinition &col, idx_t &cur_row)
-	    : IngestColBase(col.column_name, cur_row), buffer(nullptr), child(col.column_name, list_row) {
+	    : IngestColBase(col.name, cur_row), buffer(nullptr), child(col.name, list_row) {
 	}
 	virtual void SetVector(Vector *new_vec) noexcept override {
 		IngestColBase::SetVector(new_vec);
@@ -413,7 +413,7 @@ public:
 	using IngestColBase::Write;
 
 	IngestColNestedJSON(const IngestColumnDefinition &col, idx_t &cur_row, JSONDispatcher &dispatcher)
-	    : IngestColBase(col.column_name, cur_row), dispatcher(dispatcher), handler(JSONBuildColumn(col, cur_row)) {
+	    : IngestColBase(col.name, cur_row), dispatcher(dispatcher), handler(JSONBuildColumn(col, cur_row)) {
 	}
 
 	virtual void SetVector(Vector *new_vec) noexcept override {
@@ -438,7 +438,7 @@ public:
 	using IngestColBase::Write;
 
 	IngestColNestedXML(const IngestColumnDefinition &col, idx_t &cur_row, XMLParseHandler &dispatcher)
-	    : IngestColBase(col.column_name, cur_row), dispatcher(dispatcher) {
+	    : IngestColBase(col.name, cur_row), dispatcher(dispatcher) {
 		handler.assign(XMLBuildColumn(col, cur_row));
 	}
 
@@ -461,8 +461,15 @@ private:
 
 void ParserImpl::BuildColumns() {
 	Schema *schema = get_schema();
-	IngestColBase* column;
-	for (const auto &col : schema->columns) {
+	for (const auto &col : schema->fields) {
+		int index = col.index - 1;
+		if (index < 0) {
+			throw InvalidInputException("Invalid column index: %d", col.index);
+		}
+		if (index >= m_columns.size()) {
+			m_columns.resize(index + 1);
+		}
+		IngestColBase *column;
 		if (col.is_json) {
 			column = new IngestColNestedJSON(col, cur_row, json_dispatcher);
 		} else if (col.format == "XML") {
@@ -477,23 +484,29 @@ void ParserImpl::BuildColumns() {
 		} else {
 			column = BuildColumn(col, cur_row);
 		}
-		m_columns.push_back(std::unique_ptr<IngestColBase>(column));
+		m_columns[index] = std::unique_ptr<IngestColBase>(column);
 	}
+	m_columns.push_back(std::make_unique<IngestColBIGINT>("__rownum__", cur_row));
 }
 
 void ParserImpl::BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) {
 	for (auto &col : m_columns) {
-		names.push_back(col->GetName());
-		return_types.push_back(col->GetType());
+		if (col) {
+			names.push_back(col->GetName());
+			return_types.push_back(col->GetType());
+		}
 	}
 }
 
 idx_t ParserImpl::FillChunk(DataChunk &output) {
 	size_t n_columns = m_columns.size();
-	D_ASSERT(output.data.size() == n_columns);
-	for (size_t i = 0; i < n_columns; ++i) {
-		m_columns[i]->SetVector(&output.data[i]);
+	size_t i_col = 0;
+	for (auto &col : m_columns) {
+		if (col) {
+			col->SetVector(&output.data[i_col++]);
+		}
 	}
+	D_ASSERT(output.data.size() == i_col);
 
 	const Schema& schema = *get_schema();
 	RowRaw raw_row;
@@ -506,29 +519,26 @@ idx_t ParserImpl::FillChunk(DataChunk &output) {
 			return cur_row;
 		}
 
-		for (size_t i_col = 0; i_col < n_columns; ++i_col)
+		for (size_t i_col = 0; i_col < n_columns-1; ++i_col)
 		{
-			const IngestColumnDefinition& col = schema.columns[i_col];
-			auto &cnv = *m_columns[i_col];
-			if (col.index >= 0)
-			{
-				CellRaw& cell = raw_row[col.index];
-				if (col.index >= (int)raw_row.size() || schema.remove_null_strings && cell_null_str(cell))
-				{
-					cnv.WriteNull();
-					continue;
-				}
-				bool res = std::visit(overloaded{
-				[&](const CellRawDate& v) -> bool { return cnv.WriteExcelDate(v.d); },
-				[&](auto v) -> bool { return cnv.Write(v); },
-				}, cell);
-				if (!res) {
-					cnv.WriteNull();
-				}
-			} else {// if (col.index == COL_ROWNUM)
-				cnv.Write(row_number);
+			IngestColBase *col = m_columns[i_col].get();
+			if (!col) {
+				continue;
+			}
+			CellRaw& cell = raw_row[i_col];
+			if (i_col >= (int)raw_row.size() || schema.remove_null_strings && cell_null_str(cell)) {
+				col->WriteNull();
+				continue;
+			}
+			bool res = std::visit(overloaded{
+			[&](const CellRawDate& v) -> bool { return col->WriteExcelDate(v.d); },
+			[&](auto v) -> bool { return col->Write(v); },
+			}, cell);
+			if (!res) {
+				col->WriteNull();
 			}
 		}
+		m_columns.back()->Write(row_number);
 	}
 	return STANDARD_VECTOR_SIZE;
 }
@@ -1251,23 +1261,23 @@ private:
 		if (!m_children.empty())
 		{
 			col.column_type = ColumnType::Struct;
-			create_schema(col.fields, (int)col.index);
+			create_schema(col.fields);
 		}
 		else if (m_has_single_value)
 			std::apply([&col](auto&& ... args) { return (args.create_schema(col) || ...); }, m_types);
 		col.list_levels = m_is_list;
 	}
 
-	void create_schema(std::vector<IngestColumnDefinition>& fields, int col_index = 0) const
+	void create_schema(std::vector<IngestColumnDefinition>& fields) const
 	{
 		for (const auto& [key, value] : m_children)
 		{
-			fields.push_back({ key, ColumnType::String, col_index, false });
+			fields.push_back({ key, ColumnType::String });
 			value.create_schema(fields.back());
 		}
 		if (m_has_single_value)
 		{
-			fields.push_back({ "#text", ColumnType::String, col_index, false });
+			fields.push_back({ "#text", ColumnType::String });
 			IngestColumnDefinition& col = fields.back();
 			std::apply([&col](auto&& ... args) { return (args.create_schema(col) || ...); }, m_types);
 		}
@@ -1373,7 +1383,7 @@ public:
 	virtual bool Key(const char* s, int length, bool copy, JSONDispatcher* dispatcher) override;
 	bool create_schema(IngestColumnDefinition& col) const;
 	bool create_geometry(IngestColumnDefinition& col) const;
-	void create_schema(std::vector<IngestColumnDefinition>& fields, int col_index = 0) const;
+	void create_schema(std::vector<IngestColumnDefinition>& fields) const;
 
 	infer_children<JSONInferValue> m_children;
 };
@@ -1454,7 +1464,7 @@ public:
 	{
 		if ((m_flags == ValueArray) && !m_obj.m_children.empty() && m_value_level == 1)
 		{
-			m_obj.create_schema(schema.columns);
+			m_obj.create_schema(schema.fields);
 			schema.start_path.resize(level);
 			return true;
 		}
@@ -1498,7 +1508,7 @@ bool JSONInferObject::create_schema(IngestColumnDefinition& col) const
 	if (m_children.empty())
 		return false;
 	col.column_type = ColumnType::Struct;
-	create_schema(col.fields, (int)col.index);
+	create_schema(col.fields);
 	return true;
 }
 
@@ -1525,11 +1535,11 @@ bool JSONInferObject::create_geometry(IngestColumnDefinition& col) const
 	return true;
 }
 
-void JSONInferObject::create_schema(std::vector<IngestColumnDefinition>& fields, int col_index) const
+void JSONInferObject::create_schema(std::vector<IngestColumnDefinition>& fields) const
 {
 	for (const auto& [key, value] : m_children)
 	{
-		fields.push_back({ key, ColumnType::String, col_index, false });
+		fields.push_back({ key, ColumnType::String });
 		IngestColumnDefinition& col = fields.back();
 		if (key == "geometry" && value.m_obj.create_geometry(col))
 		{
@@ -1655,8 +1665,8 @@ void ParserImpl::build_column_info(std::vector<Column>& columns)
 					break;
 				}
 			}
-		schema.columns.push_back({ *col_name, ColumnType::String, (int)i_col, false });
-		columns[i_col].create_schema(schema.columns.back());
+		schema.fields.push_back({ *col_name, ColumnType::String, (int)i_col + 1 });
+		columns[i_col].create_schema(schema.fields.back());
 	}
 }
 
@@ -1840,7 +1850,7 @@ bool JSONParser::do_infer_schema()
 {
 	const size_t SAMPLE_SIZE = 1024 * 1024 * 5;
 
-	m_schema.columns.clear();
+	m_schema.fields.clear();
 	if (!m_reader->is_file() || !m_reader->open())
 		return false;
 	std::string sample(SAMPLE_SIZE, '\0');
@@ -1857,7 +1867,7 @@ bool XMLParser::do_infer_schema()
 {
 	const size_t SAMPLE_SIZE = 1024 * 1024 * 5;
 
-	m_schema.columns.clear();
+	m_schema.fields.clear();
 	if (!open())
 		return false;
 	std::string sample(SAMPLE_SIZE, '\0');
@@ -1866,7 +1876,7 @@ bool XMLParser::do_infer_schema()
 
 	XMLInferHandler handler;
 	handler.parse(sample);
-	return handler.get_value().create_file_schema(get_schema()->columns);
+	return handler.get_value().create_file_schema(get_schema()->fields);
 }
 
 bool ParserImpl::infer_schema()
@@ -1878,31 +1888,6 @@ bool ParserImpl::infer_schema()
 		return false;
 	}
 	schema.status = STATUS_OK;
-	schema.columns.push_back({ "__rownum__", ColumnType::Integer, COL_ROWNUM, false });
-
-	struct BuildColIndices
-	{
-		int dest_index;
-		void traverse(IngestColumnDefinition& parent)
-		{
-			for (IngestColumnDefinition& col : parent.fields)
-			{
-				col.dest_index = dest_index++;
-				if (col.column_type == ColumnType::Struct)
-					traverse(col);
-			}
-		}
-	} col_indices {(int)schema.columns.size()};
-
-	for (size_t i_col = 0; i_col < schema.columns.size(); ++i_col)
-	{
-		IngestColumnDefinition& col = schema.columns[i_col];
-		if (col.column_type == ColumnType::Struct)
-		{
-			col.dest_index = i_col;
-			col_indices.traverse(col);
-		}
-	}
 	return true;
 }
 

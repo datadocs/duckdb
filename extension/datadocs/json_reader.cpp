@@ -76,7 +76,7 @@ public:
 
 class JSONStruct : public JSONValue, public IngestColBase {
 public:
-	JSONStruct(const IngestColumnDefinition &col, idx_t &cur_row) : JSONValue(this), IngestColBase(col.column_name, cur_row) {
+	JSONStruct(const IngestColumnDefinition &col, idx_t &cur_row) : JSONValue(this), IngestColBase(col.name, cur_row) {
 		JSONBuildColumns(col.fields, m_children.keys, m_columns, cur_row);
 	}
 
@@ -106,9 +106,11 @@ public:
 	virtual bool Key(const char* s, int length, bool copy, JSONDispatcher* dispatcher) override
 	{
 		size_t i = m_children.GetIndex(std::string(s, length));
-		if (i == -1)
-			return false;
-		dispatcher->m_value = m_columns[i].get();
+		if (i == -1) {
+			dispatcher->skip();
+		} else {
+			dispatcher->m_value = m_columns[i].get();
+		}
 		return true;
 	}
 	virtual bool EndObject(JSONDispatcher* dispatcher) override {
@@ -193,7 +195,7 @@ private:
 class JSONListWrapper : public JSONValue, public IngestColBase {
 public:
 	JSONListWrapper(const IngestColumnDefinition &col, idx_t &cur_row, int list_level)
-	    : JSONValue(this), IngestColBase(col.column_name, cur_row), child(col, list_level) {
+	    : JSONValue(this), IngestColBase(col.name, cur_row), child(col, list_level) {
 	}
 	virtual bool StartArray(JSONDispatcher* dispatcher) override {
 		child.Init(Writer().GetList());
@@ -577,35 +579,32 @@ JSONValue *JSONBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row, in
 		return new JSONListWrapper(col, cur_row, list_level);
 	}
 	switch(col.column_type) {
-	case ColumnType::String: return new JSONCol<IngestColVARCHAR>(col.column_name, cur_row);
-	case ColumnType::Boolean: return new JSONCol<IngestColBOOLEAN>(col.column_name, cur_row);
-	case ColumnType::Integer: return new JSONCol<IngestColBIGINT>(col.column_name, cur_row);
-	case ColumnType::Decimal: return new JSONCol<IngestColDOUBLE>(col.column_name, cur_row);
-	case ColumnType::Date: return new JSONCol<IngestColDATE>(col.column_name, cur_row, col.format);
-	case ColumnType::Time: return new JSONCol<IngestColTIME>(col.column_name, cur_row, col.format);
-	case ColumnType::Datetime: return new JSONCol<IngestColTIMESTAMP>(col.column_name, cur_row, col.format);
+	case ColumnType::String: return new JSONCol<IngestColVARCHAR>(col.name, cur_row);
+	case ColumnType::Boolean: return new JSONCol<IngestColBOOLEAN>(col.name, cur_row);
+	case ColumnType::Integer: return new JSONCol<IngestColBIGINT>(col.name, cur_row);
+	case ColumnType::Decimal: return new JSONCol<IngestColDOUBLE>(col.name, cur_row);
+	case ColumnType::Date: return new JSONCol<IngestColDATE>(col.name, cur_row, col.format);
+	case ColumnType::Time: return new JSONCol<IngestColTIME>(col.name, cur_row, col.format);
+	case ColumnType::Datetime: return new JSONCol<IngestColTIMESTAMP>(col.name, cur_row, col.format);
 	case ColumnType::Bytes:
 		if (col.format == "base64") {
-			return new JSONCol<IngestColBLOBBase64>(col.column_name, cur_row);
+			return new JSONCol<IngestColBLOBBase64>(col.name, cur_row);
 		}
-		return new JSONCol<IngestColBLOBHex>(col.column_name, cur_row);
-	case ColumnType::Numeric: return new JSONCol<IngestColNUMERIC>(col.column_name, cur_row, col.i_digits, col.f_digits);
-	case ColumnType::Geography: return new IngestColJSONGeo(col.column_name, cur_row);
+		return new JSONCol<IngestColBLOBHex>(col.name, cur_row);
+	case ColumnType::Numeric: return new JSONCol<IngestColNUMERIC>(col.name, cur_row, col.i_digits, col.f_digits);
+	case ColumnType::Geography: return new IngestColJSONGeo(col.name, cur_row);
 	case ColumnType::Struct: return new JSONStruct(col, cur_row);
-	case ColumnType::Variant: return new IngestColJSONVariant(col.column_name, cur_row);
+	case ColumnType::Variant: return new IngestColJSONVariant(col.name, cur_row);
 	default:
 		D_ASSERT(false);
-		return new JSONCol<IngestColBase>(col.column_name, cur_row);
+		return new JSONCol<IngestColBase>(col.name, cur_row);
 	}
 }
 
 static void JSONBuildColumns(const std::vector<IngestColumnDefinition> &fields, std::unordered_map<string, size_t> &keys,
     std::vector<std::unique_ptr<JSONValue>> &columns, idx_t &cur_row) {
 	for (const auto &col : fields) {
-		if (col.index < 0) {
-			continue;
-		}
-		keys.emplace(col.column_name, columns.size());
+		keys.emplace(col.name, columns.size());
 		columns.push_back(std::unique_ptr<JSONValue>(JSONBuildColumn(col, cur_row)));
 	}
 }
@@ -661,7 +660,7 @@ void JSONParser::BuildColumns() {
 }
 
 void JSONTopListStruct::BuildColumns(JSONSchema &schema) {
-	JSONBuildColumns(schema.columns, m_children.keys, m_columns, cur_row);
+	JSONBuildColumns(schema.fields, m_children.keys, m_columns, cur_row);
 }
 
 void JSONParser::BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) {
