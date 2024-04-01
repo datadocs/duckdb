@@ -16,14 +16,22 @@ if (NOT WIN32)
 endif ()
 
 function (fetch_dependency name cmake_file)
-  if(EXISTS ${CMAKE_CURRENT_BINARY_DIR}/${name}-build)
+  file(GLOB THE_BUILD_DIR_HAS_FILES "${CMAKE_CURRENT_BINARY_DIR}/${name}-build/*")
+  if(THE_BUILD_DIR_HAS_FILES)
     message(WARNING "${Cyan}Dependency found - not rebuilding - ${CMAKE_CURRENT_BINARY_DIR}/${name}-build${ColorReset}")
   else()
     message("${Cyan}Fetching Dependency '${name}' - ${CMAKE_CURRENT_BINARY_DIR}/${name}-download${ColorReset}")
     configure_file(${cmake_file} ${name}-download/CMakeLists.txt)
+
+    if(EMSCRIPTEN)
     execute_process(COMMAND emcmake ${CMAKE_COMMAND} -G "${CMAKE_GENERATOR}" .
             RESULT_VARIABLE result
             WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${name}-download )
+    else()
+      execute_process(COMMAND ${CMAKE_COMMAND} -G "${CMAKE_GENERATOR}" .
+          RESULT_VARIABLE result
+          WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/${name}-download )
+    endif()
     if(result)
       message(FATAL_ERROR "CMake step for ${name} failed: ${result}")
     endif()
