@@ -40,6 +40,7 @@ bool BaseReader::open() {
 }
 
 void BaseReader::close() {
+	debug_file_io("BaseReader::close(%s)", filename().c_str());
 	do_close();
 	reset_buffer(0);
 }
@@ -217,7 +218,8 @@ bool BaseReader::seek(size_t location) {
 #ifdef DATADOCS_DEBUG_FILE_IO
 	auto _current_location = tell();
 	long _offset = location - _current_location;
-	debug_file_io("BaseReader::seek(%zu) offset=%ld", location, _offset);
+	debug_file_io("BaseReader::seek(%zu) offset=%ld%s", location, _offset, //
+	              m_enabled_async_seek ? " async" : "");
 #endif
 	if (location < m_position_buf)
 		m_optimization_read_backward++;
@@ -234,6 +236,8 @@ bool BaseReader::seek(size_t location) {
 		reset_buffer(location);
 		return true;
 	}
+
+	debug_file_io("BaseReader::seek ERROR");
 	return false;
 }
 

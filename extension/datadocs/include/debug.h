@@ -4,7 +4,7 @@
 ///   and the native environment
 ///
 /// @author Liu Yue @hangxingliu
-/// @version 2024-04-02
+/// @version 2024-04-03
 /// ================================
 /// Example Usage:
 ///
@@ -36,7 +36,9 @@ inline size_t __debug_console_log_max = 0;
 #ifdef __EMSCRIPTEN__
 #define _debug_console_log() emscripten_console_log(__debug_console_log_buff);
 #else
-#define _debug_console_log() puts(__debug_console_log_buff);
+#define _debug_console_log()                                                                                           \
+	puts(__debug_console_log_buff);                                                                                    \
+	fflush(stdout);
 #endif
 
 #define console_log(...)                                                                                               \

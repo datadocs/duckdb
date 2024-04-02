@@ -7,7 +7,7 @@
 #   (This script has been tested on Ubuntu 22.04 and MacOS Sonoma 14)
 # 
 # Author:  Liu Yue @hangxingliu
-# Version: 2024-04-02
+# Version: 2024-04-03
 #
 # Required Softwares:
 #
@@ -38,6 +38,11 @@
 #
 throw() { echo -e "fatal: $1" >&2; exit 1; }
 execute() { echo "$ $*"; "$@" || throw "Failed to execute '$1'"; }
+has_flag() {
+    local flag="$1"; shift;
+    for arg; do [[ "$arg" == "$flag" ]] && return 0; done
+    return 1;
+}
 
 command -v cmake >/dev/null || throw "cmake is not installed!";
 command -v ninja >/dev/null || throw "ninja is not installed!";
@@ -66,5 +71,5 @@ echo "";
 echo "build done: +${SECONDS}s"
 echo "";
 
-# Executing the built DuckDB shell for testing if this script is executing in a Bash shell
-if [ -t 1 ]; then execute ./build/release/duckdb; fi
+# Executing the built DuckDB shell for testing
+if has_flag "--shell" "${@}"; then execute ./build/release/duckdb; fi
