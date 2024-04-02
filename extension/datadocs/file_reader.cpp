@@ -1,7 +1,9 @@
+#include "file_reader.h"
+
+#include "debug.h"
+
 #include <algorithm>
 #include <string.h>
-
-#include "file_reader.h"
 
 namespace duckdb {
 
@@ -95,6 +97,7 @@ size_t BaseReader::read(char *buffer, size_t size) {
 bool BaseReader::underflow() {
 	if (m_read_pos >= m_read_end) {
 		int sz = do_read(m_buffer, buf_size);
+		debug_do_read_result(buf_size, sz);
 		if (sz <= 0)
 			return false;
 		m_position += sz;
@@ -123,6 +126,7 @@ size_t BaseReader::tell() const {
 }
 
 bool BaseReader::seek(size_t location) {
+	debug_file_io("BaseReader::seek(%zu)", location);
 	if (do_seek(location)) {
 		m_position = location;
 		reset_buffer();
