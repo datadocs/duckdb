@@ -90,7 +90,6 @@ long ZCALLBACK zf_seek(voidpf opaque, voidpf stream, uLong offset, int origin) {
 	auto reader = (duckdb::FileReader *)opaque;
 	// auto handle = (duckdb::FileHandle*)stream;
 	long new_pos;
-	debug_file_io("zf_seek(offset=%zu, origin=%d)", offset, origin);
 	switch (origin) {
 	case ZLIB_FILEFUNC_SEEK_CUR:
 		new_pos = reader->tell() + offset;
@@ -102,11 +101,17 @@ long ZCALLBACK zf_seek(voidpf opaque, voidpf stream, uLong offset, int origin) {
 		new_pos = offset;
 		break;
 	default:
+		debug_file_io("zf_seek(offset=%zu, origin=%d) ERROR: unknown origin", offset, origin);
 		return -1;
 	}
-	if (new_pos < 0 || new_pos > reader->filesize())
+
+	debug_file_io("zf_seek(offset=%zu, origin=%d) new_pos=%ld", offset, origin, new_pos);
+	if (new_pos < 0 || new_pos > reader->filesize()) {
+		debug_file_io("zf_seek ERROR: new_pos is invalid");
 		return 1;
-	reader->seek((size_t) new_pos);
+	}
+
+	reader->seek((size_t)new_pos);
 	return 0;
 }
 
@@ -118,8 +123,10 @@ long ZCALLBACK zf_tell(voidpf opaque, voidpf stream) {
 }
 
 uLong ZCALLBACK zf_read(voidpf opaque, voidpf stream, void *buf, uLong size) {
-	return ((duckdb::FileReader *)opaque)->read((char *)buf, size);
-	// return ((duckdb::FileHandle *)stream)->Read(buf, size);
+	size_t result = ((duckdb::FileReader *)opaque)->read((char *)buf, size);
+	// size_t result = ((duckdb::FileHandle *)stream)->Read(buf, size);
+	// debug_file_io("zf_read(%zu) [0]=%02x", size, ((unsigned char*)buf)[0]);
+	return result;
 }
 
 int ZCALLBACK zf_close(voidpf opaque, voidpf stream) {
