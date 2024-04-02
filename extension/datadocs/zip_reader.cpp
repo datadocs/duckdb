@@ -49,6 +49,12 @@ protected:
 		return unzReadCurrentFile(m_zip, buffer, size);
 	}
 
+	virtual bool do_seek(size_t location) override
+	{
+		throw NotImplementedException("do_seek needs to be implemented and tested");
+	}
+
+
 	unzFile m_zip;
 };
 

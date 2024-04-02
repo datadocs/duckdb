@@ -5,37 +5,35 @@
 
 namespace duckdb {
 
-BaseReader::BaseReader(const std::string& filename) :
-	m_filename(filename),
-	m_cnt_read(0)
-{
-	m_read_pos = m_read_end = m_buffer + buf_size;
+BaseReader::BaseReader(const std::string &filename) : m_filename(filename), m_position(0) {
+	reset_buffer();
 }
 
-BaseReader::~BaseReader()
-{}
+BaseReader::~BaseReader() {
+}
 
-bool BaseReader::open()
-{
-	m_read_pos = m_read_end = m_buffer + buf_size;
-	m_cnt_read = 0;
+void BaseReader::reset_buffer() {
+	m_read_pos = m_read_end = m_buffer;
+}
+
+bool BaseReader::open() {
+	reset_buffer();
+	m_position = 0;
 	return do_open();
 }
 
-void BaseReader::close()
-{
+void BaseReader::close() {
 	do_close();
-	m_read_pos = m_read_end = m_buffer + buf_size;
-	m_cnt_read = 0;
+	reset_buffer();
+	m_position = 0;
 }
 
-void BaseReader::skip_prefix(const std::string_view& prefix)
-{
+/// @todo This function has a potential buffer overrun issue
+void BaseReader::skip_prefix(const std::string_view &prefix) {
 	if (!underflow())
 		return;
 	for (char c : prefix)
-		if (m_read_pos >= m_read_end || *m_read_pos++ != c)
-		{
+		if (m_read_pos >= m_read_end || *m_read_pos++ != c) {
 			m_read_pos = m_buffer;
 			return;
 		}
@@ -74,33 +72,32 @@ bool BaseReader::check_next_char(char c)
 	return true;
 }
 
-size_t BaseReader::read(char* buffer, size_t size)
-{
-	size_t from_buffer = 0;
-	size_t in_buffer = m_read_end - m_read_pos;
-	if (in_buffer > 0)
-	{
-		from_buffer = std::min(size, in_buffer);
-		memcpy(buffer, m_read_pos, from_buffer);
-		m_read_pos += from_buffer;
-		buffer += from_buffer;
-		size -= from_buffer;
+size_t BaseReader::read(char *buffer, size_t size) {
+	size_t bytes_remaining = size;
+	size_t bytes_read = 0;
+
+	while (bytes_remaining > 0) {
+		if (!underflow())
+			return bytes_read;
+
+		size_t available_bytes_in_buffer = m_read_end - m_read_pos;
+		size_t bytes_from_buffer = std::min(bytes_remaining, available_bytes_in_buffer);
+		memcpy(buffer, m_read_pos, bytes_from_buffer);
+		buffer += bytes_from_buffer;
+		bytes_read += bytes_from_buffer;
+		bytes_remaining -= bytes_from_buffer;
+
+		m_read_pos += bytes_from_buffer;
 	}
-	int from_file = do_read(buffer, size);
-	if (from_file < 0)
-		return 0;
-	m_cnt_read += from_file;
-	return from_buffer + (size_t)from_file;
+	return bytes_read;
 }
 
-bool BaseReader::underflow()
-{
-	if (m_read_pos >= m_read_end)
-	{
+bool BaseReader::underflow() {
+	if (m_read_pos >= m_read_end) {
 		int sz = do_read(m_buffer, buf_size);
 		if (sz <= 0)
 			return false;
-		m_cnt_read += sz;
+		m_position += sz;
 		m_read_end = m_buffer + sz;
 		m_read_pos = m_buffer;
 	}
@@ -121,9 +118,17 @@ xls::MemBuffer* BaseReader::read_all()
 	return &m_content;
 }
 
-size_t BaseReader::tell() const
-{
-	return m_cnt_read - (m_read_end - m_read_pos);
+size_t BaseReader::tell() const {
+	return m_position - (m_read_end - m_read_pos);
+}
+
+bool BaseReader::seek(size_t location) {
+	if (do_seek(location)) {
+		m_position = location;
+		reset_buffer();
+		return true;
+	}
+	return false;
 }
 
 int BaseReader::pos_percent()
@@ -163,4 +168,12 @@ int FileReader::do_read(char* buffer, size_t size)
 	return file_handle->Read(buffer, size);
 }
 
+bool FileReader::do_seek(size_t location) {
+	if (file_handle) {
+		file_handle->Seek(location);
+		return true;
+	}
+	return false;
 }
+
+} // namespace duckdb
