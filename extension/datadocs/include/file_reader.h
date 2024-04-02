@@ -10,6 +10,26 @@
 
 namespace duckdb {
 
+///
+///  BaseReader
+///    |---- derive ---> FileReader
+///    |                    |---- Call ---> DuckDB::FileHandle for I/O operations
+///    |
+///    |---- derive ----> ZIPReader
+///
+/// ----------------------------------------------
+///
+///  XLParser<xls::WorkBook> -- alias --> XLSXParser
+///    |
+///    |---- call ---> WorkBookX::open(BaseReader *reader)
+///                      |
+///                      |---- call ---> unzOpenFS(reader)
+///                                        |
+///                                        ↓
+///                 It creates a mini zip instance for reading the zip file,
+///                 and binds reader's methods to this instance via `ioapi` with
+///                 adapters
+
 class BaseReader
 {
 public:
@@ -20,23 +40,27 @@ public:
 	const std::string& filename() { return m_filename; }
 	size_t filesize() { return m_content.size; }
 	virtual bool is_file() = 0;
+
+	// basic file I/O methods
 	bool open();
 	void close();
-	void skip_prefix(const std::string_view& prefix);
+	size_t read(char* buffer, size_t size);
+	size_t tell() const;
+	bool seek(size_t location);
+
 	const char* peek_start(size_t length);
 	bool next_char(char& c);
 	bool peek(char& c);
 	bool check_next_char(char c);
-	size_t read(char* buffer, size_t size);
 	xls::MemBuffer* read_all();
-	size_t tell() const;
 	int pos_percent();
 
 protected:
 	bool underflow();
 	virtual bool do_open() = 0;
 	virtual void do_close() = 0;
-	virtual int do_read(char* buffer, size_t size) = 0;
+	virtual bool do_seek(size_t location) = 0;
+	virtual int do_read(char *buffer, size_t size) = 0;
 
 	std::string m_filename;
 	xls::MemBuffer m_content;
@@ -44,7 +68,9 @@ protected:
 	const char* m_read_pos;
 	const char* m_read_end;
 	char m_buffer[buf_size];
-	size_t m_cnt_read;
+	size_t m_position;
+	/// @brief Reset pointers related to the buffer
+	void reset_buffer();
 };
 
 class FileReader : public BaseReader
@@ -56,7 +82,8 @@ public:
 protected:
 	virtual bool do_open() override;
 	virtual void do_close() override;
-	virtual int do_read(char* buffer, size_t size) override;
+	virtual bool do_seek(size_t location) override;
+	virtual int do_read(char *buffer, size_t size) override;
 
 	FileSystem &fs;
 public:
