@@ -111,8 +111,10 @@ long ZCALLBACK zf_seek(voidpf opaque, voidpf stream, uLong offset, int origin) {
 }
 
 long ZCALLBACK zf_tell(voidpf opaque, voidpf stream) {
-	return ((duckdb::FileReader *)opaque)->tell();
-	// return ((duckdb::FileHandle *)stream)->SeekPosition();
+	size_t position = ((duckdb::FileReader *)opaque)->tell();
+	// auto position = ((duckdb::FileHandle *)stream)->SeekPosition();
+	debug_file_io("zf_tell() => %zu", position);
+	return position;
 }
 
 uLong ZCALLBACK zf_read(voidpf opaque, voidpf stream, void *buf, uLong size) {

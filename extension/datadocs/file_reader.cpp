@@ -8,27 +8,40 @@
 namespace duckdb {
 
 BaseReader::BaseReader(const std::string &filename)
-    : m_filename(filename), seek_before_next_read(-1), m_position_buf(0), m_position(0) {
-	reset_buffer();
+    : m_filename(filename), m_optimization_read_backward(0), m_enabled_async_seek(false) {
+	reset_buffer(0);
 }
 
 BaseReader::~BaseReader() {
 }
 
-void BaseReader::reset_buffer() {
+void BaseReader::reset_buffer(size_t position_buf) {
+	m_position_buf = m_position_next_read = position_buf;
 	m_read_pos = m_read_end = m_buffer;
+	m_pending_async_seek = -1;
+}
+
+bool BaseReader::handle_async_seek() {
+	if (m_pending_async_seek >= 0) {
+		if (!do_seek(m_pending_async_seek))
+			return false;
+		m_pending_async_seek = -1;
+	}
+	return true;
 }
 
 bool BaseReader::open() {
-	reset_buffer();
-	m_position = 0;
-	return do_open();
+	reset_buffer(0);
+	bool ok = do_open();
+	debug_file_io("BaseReader::open(%s, size=%zu, %s%s)", //
+	              filename().c_str(), filesize(),         //
+	              m_enabled_async_seek ? "async_seek, " : "", ok ? "OK" : "FAILED");
+	return ok;
 }
 
 void BaseReader::close() {
 	do_close();
-	reset_buffer();
-	m_position = 0;
+	reset_buffer(0);
 }
 
 bool BaseReader::skip_prefix(const std::string_view &prefix) {
@@ -94,15 +107,52 @@ size_t BaseReader::read(char *buffer, size_t size) {
 	return bytes_read;
 }
 
+/// ```
+/// file: |-- ... ----------|--------------|---- ... --|
+///      head               ↑              |           end
+///              m_position_next_read      |
+///                  |<---->|              |
+///                  |   ↑  |              |
+///                  | read_back           |
+///                  |<------ m_buffer --->|
+/// ```
 bool BaseReader::underflow() {
 	if (m_read_pos >= m_read_end) {
+		/// Read some bytes backward for optimization.
+		size_t read_back = 0;
+
+		// An optimization for reading the tail
+		size_t len_to_the_tail = filesize() - m_position_next_read;
+		if (len_to_the_tail < buf_size)
+			read_back = buf_size - len_to_the_tail;
+		else if (m_optimization_read_backward >= 2) {
+			read_back = buf_size >> 1; // 1/2 of the buffer
+			m_optimization_read_backward = 0;
+		}
+
+		if (m_position_next_read > 0 && read_back > 0) {
+			read_back = std::min(read_back, m_position_next_read);
+
+			size_t location = (size_t)m_position_next_read - read_back;
+			debug_file_io("BaseReader::seek(read_back at %zu) -%zu", m_position_next_read, read_back);
+
+			if (do_seek(location)) {
+				reset_buffer(location);
+			} else {
+				// revert the `read_back` operation due to failed seek attempt
+				read_back = 0;
+			}
+		}
+
+		handle_async_seek();
 		int sz = do_read(m_buffer, buf_size);
 		debug_do_read_result(buf_size, sz);
-		if (sz <= 0)
+		if (sz <= 0 + read_back)
 			return false;
-		m_position += sz;
+		m_position_buf = m_position_next_read;
+		m_position_next_read += sz;
 		m_read_end = m_buffer + sz;
-		m_read_pos = m_buffer;
+		m_read_pos = m_buffer + read_back;
 	}
 	return true;
 }
@@ -113,24 +163,26 @@ bool BaseReader::underflow(size_t desired_bytes) {
 	if (remaining_bytes >= desired_bytes)
 		return true; // The buffer is full, no need to be filled
 
-	debug_file_io("underflow_force(remaining_bytes=%zu)", remaining_bytes);
+	debug_file_io("underflow(desired_bytes=%zu, remaining_bytes=%zu)", desired_bytes, remaining_bytes);
 
 	// With memcpy, the destination cannot overlap the source at all.
 	// With memmove it can. This means that memmove might be very slightly slower than memcpy,
 	// as it cannot make the same assumptions.
 	// https://stackoverflow.com/questions/1201319
 	memmove(m_buffer, m_read_pos, remaining_bytes);
+	m_position_buf += m_read_pos - m_buffer;
 
 	size_t bytes_to_read = buf_size - remaining_bytes;
 	char *write_to = m_buffer + remaining_bytes;
 	m_read_pos = m_buffer;
 	m_read_end = write_to;
 
+	handle_async_seek();
 	int sz = do_read(write_to, bytes_to_read);
 	debug_do_read_result(bytes_to_read, sz);
 	if (sz <= 0)
 		return false;
-	m_position += sz;
+	m_position_next_read += sz;
 	m_read_end = write_to + sz;
 	return true;
 }
@@ -150,14 +202,36 @@ xls::MemBuffer* BaseReader::read_all()
 }
 
 size_t BaseReader::tell() const {
-	return m_position - (m_read_end - m_read_pos);
+	return m_position_buf + (m_read_pos - m_buffer);
 }
 
 bool BaseReader::seek(size_t location) {
-	debug_file_io("BaseReader::seek(%zu)", location);
+	if (location >= m_position_buf && location < m_position_buf + current_buffer_size()) {
+		// seek in the buffer
+		size_t offset = location - m_position_buf;
+		m_read_pos = m_buffer + offset;
+		debug_file_io("BaseReader::seek(%zu) in_buffer=%zu", location, offset);
+		return true;
+	}
+
+#ifdef DATADOCS_DEBUG_FILE_IO
+	auto _current_location = tell();
+	long _offset = location - _current_location;
+	debug_file_io("BaseReader::seek(%zu) offset=%ld", location, _offset);
+#endif
+	if (location < m_position_buf)
+		m_optimization_read_backward++;
+	else
+		m_optimization_read_backward = 0;
+
+	if (m_enabled_async_seek) {
+		reset_buffer(location);
+		m_pending_async_seek = location;
+		return true;
+	}
+
 	if (do_seek(location)) {
-		m_position = location;
-		reset_buffer();
+		reset_buffer(location);
 		return true;
 	}
 	return false;
