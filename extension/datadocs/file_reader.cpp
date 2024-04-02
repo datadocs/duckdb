@@ -7,7 +7,8 @@
 
 namespace duckdb {
 
-BaseReader::BaseReader(const std::string &filename) : m_filename(filename), m_position(0) {
+BaseReader::BaseReader(const std::string &filename)
+    : m_filename(filename), seek_before_next_read(-1), m_position_buf(0), m_position(0) {
 	reset_buffer();
 }
 
