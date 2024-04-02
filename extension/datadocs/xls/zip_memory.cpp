@@ -12,17 +12,15 @@ static voidpf ZCALLBACK zm_open_file(voidpf opaque, const char* filename, int mo
 	return opaque;
 }
 
-long ZCALLBACK zm_seek(voidpf opaque, voidpf stream, uLong offset, int origin)
-{
-	MemBuffer* mem = (MemBuffer*)stream;
-	uLong new_pos;
-	switch (origin)
-	{
+long ZCALLBACK zm_seek(voidpf opaque, voidpf stream, uLong offset, int origin) {
+	MemBuffer *mem = (MemBuffer *)stream;
+	long new_pos;
+	switch (origin) {
 	case ZLIB_FILEFUNC_SEEK_CUR:
 		new_pos = mem->pos + offset;
 		break;
 	case ZLIB_FILEFUNC_SEEK_END:
-		new_pos = mem->size + offset;
+		new_pos = mem->size - offset;
 		break;
 	case ZLIB_FILEFUNC_SEEK_SET:
 		new_pos = offset;
@@ -30,9 +28,9 @@ long ZCALLBACK zm_seek(voidpf opaque, voidpf stream, uLong offset, int origin)
 	default:
 		return -1;
 	}
-	if (new_pos > mem->size)
+	if (new_pos < 0 || new_pos > mem->size)
 		return 1;
-	mem->pos = new_pos;
+	mem->pos = (size_t) new_pos;
 	return 0;
 }
 
@@ -86,18 +84,16 @@ static voidpf ZCALLBACK zf_open_file(voidpf opaque, const char* filename, int mo
 	return ((duckdb::FileReader*)opaque)->file_handle.get();
 }
 
-long ZCALLBACK zf_seek(voidpf opaque, voidpf stream, uLong offset, int origin)
-{
-	auto reader = (duckdb::FileReader*)opaque;
-	auto handle = (duckdb::FileHandle*)stream;
-	uLong new_pos;
-	switch (origin)
-	{
+long ZCALLBACK zf_seek(voidpf opaque, voidpf stream, uLong offset, int origin) {
+	auto reader = (duckdb::FileReader *)opaque;
+	// auto handle = (duckdb::FileHandle*)stream;
+	long new_pos;
+	switch (origin) {
 	case ZLIB_FILEFUNC_SEEK_CUR:
-		new_pos = handle->SeekPosition() + offset;
+		new_pos = reader->tell() + offset;
 		break;
 	case ZLIB_FILEFUNC_SEEK_END:
-		new_pos = reader->filesize() + offset;
+		new_pos = reader->filesize() - offset;
 		break;
 	case ZLIB_FILEFUNC_SEEK_SET:
 		new_pos = offset;
@@ -105,25 +101,25 @@ long ZCALLBACK zf_seek(voidpf opaque, voidpf stream, uLong offset, int origin)
 	default:
 		return -1;
 	}
-	if (new_pos >reader->filesize())
+	if (new_pos < 0 || new_pos > reader->filesize())
 		return 1;
-	handle->Seek(new_pos);
+	reader->seek((size_t) new_pos);
 	return 0;
 }
 
-long ZCALLBACK zf_tell(voidpf opaque, voidpf stream)
-{
-	return ((duckdb::FileHandle*)stream)->SeekPosition();
+long ZCALLBACK zf_tell(voidpf opaque, voidpf stream) {
+	return ((duckdb::FileReader *)opaque)->tell();
+	// return ((duckdb::FileHandle *)stream)->SeekPosition();
 }
 
-uLong ZCALLBACK zf_read(voidpf opaque, voidpf stream, void* buf, uLong size)
-{
-	return ((duckdb::FileHandle*)stream)->Read(buf, size);
+uLong ZCALLBACK zf_read(voidpf opaque, voidpf stream, void *buf, uLong size) {
+	return ((duckdb::FileReader *)opaque)->read((char *)buf, size);
+	// return ((duckdb::FileHandle *)stream)->Read(buf, size);
 }
 
-int ZCALLBACK zf_close(voidpf opaque, voidpf stream)
-{
-	((duckdb::FileHandle*)stream)->Close();
+int ZCALLBACK zf_close(voidpf opaque, voidpf stream) {
+	((duckdb::FileReader *)opaque)->close();
+	// ((duckdb::FileHandle *)stream)->Close();
 	return 0;
 }
 
@@ -145,4 +141,4 @@ unzFile unzOpenFS(duckdb::BaseReader *reader)
 	return unzOpen2(nullptr, &filefunc32);
 }
 
-}
+} // namespace xls
