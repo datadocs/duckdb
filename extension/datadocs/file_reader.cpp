@@ -31,20 +31,19 @@ void BaseReader::close() {
 	m_position = 0;
 }
 
-/// @todo This function has a potential buffer overrun issue
-void BaseReader::skip_prefix(const std::string_view &prefix) {
-	if (!underflow())
-		return;
+bool BaseReader::skip_prefix(const std::string_view &prefix) {
+	if (!underflow(prefix.length()))
+		return false;
 	for (char c : prefix)
 		if (m_read_pos >= m_read_end || *m_read_pos++ != c) {
 			m_read_pos = m_buffer;
-			return;
+			return false;
 		}
+	return true;
 }
 
-const char* BaseReader::peek_start(size_t length)
-{
-	if (!underflow())
+const char *BaseReader::peek_start(size_t length) {
+	if (!underflow(length))
 		return nullptr;
 	return (m_read_pos + length <= m_read_end) ? m_read_pos : nullptr;
 }
@@ -105,6 +104,34 @@ bool BaseReader::underflow() {
 		m_read_end = m_buffer + sz;
 		m_read_pos = m_buffer;
 	}
+	return true;
+}
+bool BaseReader::underflow(size_t desired_bytes) {
+	size_t remaining_bytes = remaining_bytes_in_buffer();
+	if (remaining_bytes == 0)
+		return underflow();
+	if (remaining_bytes >= desired_bytes)
+		return true; // The buffer is full, no need to be filled
+
+	debug_file_io("underflow_force(remaining_bytes=%zu)", remaining_bytes);
+
+	// With memcpy, the destination cannot overlap the source at all.
+	// With memmove it can. This means that memmove might be very slightly slower than memcpy,
+	// as it cannot make the same assumptions.
+	// https://stackoverflow.com/questions/1201319
+	memmove(m_buffer, m_read_pos, remaining_bytes);
+
+	size_t bytes_to_read = buf_size - remaining_bytes;
+	char *write_to = m_buffer + remaining_bytes;
+	m_read_pos = m_buffer;
+	m_read_end = write_to;
+
+	int sz = do_read(write_to, bytes_to_read);
+	debug_do_read_result(bytes_to_read, sz);
+	if (sz <= 0)
+		return false;
+	m_position += sz;
+	m_read_end = write_to + sz;
 	return true;
 }
 
