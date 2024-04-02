@@ -1,22 +1,23 @@
 #ifndef FILE_READER_H
 #define FILE_READER_H
 
+#include "duckdb.hpp"
+#include "xls/xlscommon.h"
+
 #include <cstdio>
 #include <string>
 
-#include "duckdb.hpp"
-
-#include "xls/xlscommon.h"
-
 #ifdef DATADOCS_DEBUG_FILE_IO
 #include "debug.h"
-#define debug_do_read_result(expected_bytes, actual_bytes) {\
-	if (actual_bytes <= 0) {\
-		console_log("do_read(%zu) pos=%zu FAILED", expected_bytes, m_position);\
-	} else {\
-		console_log("do_read(%zu) pos=%zu to=%zu len=%d", \
-		expected_bytes, m_position, m_position + actual_bytes, actual_bytes);\
-	}}
+#define debug_do_read_result(expected_bytes, actual_bytes)                                                             \
+	{                                                                                                                  \
+		if (actual_bytes <= 0) {                                                                                       \
+			console_log("do_read(%zu) pos=%zu FAILED", expected_bytes, m_position_next_read);                          \
+		} else {                                                                                                       \
+			console_log("do_read(%zu) pos=%zu to=%zu len=%d", expected_bytes, m_position_next_read,                    \
+			            m_position_next_read + actual_bytes, actual_bytes);                                            \
+		}                                                                                                              \
+	}
 #define debug_file_io(...) console_log(__VA_ARGS__)
 #else
 #define debug_do_read_result(expected_bytes, actual_bytes)
@@ -48,7 +49,7 @@ namespace duckdb {
 class BaseReader
 {
 public:
-	static constexpr size_t buf_size = 4096;
+	static constexpr size_t buf_size = 8192;
 
 	BaseReader(const std::string& filename);
 	virtual ~BaseReader();
@@ -70,11 +71,14 @@ public:
 	bool check_next_char(char c);
 	xls::MemBuffer* read_all();
 	int pos_percent();
+	void enable_async_seek() {
+		m_enabled_async_seek = true;
+	}
 
 protected:
 	bool underflow();
 	/// @brief Attempts to refill the internal buffer of the BaseReader object, if necessary,
-	/// to ensure that at least `min(buf_size, desired_bytes)` are available for reading.
+	///        to ensure that at least `min(buf_size, desired_bytes)` are available for reading.
 	bool underflow(size_t desired_bytes);
 	virtual bool do_open() = 0;
 	virtual void do_close() = 0;
@@ -84,19 +88,30 @@ protected:
 	std::string m_filename;
 	xls::MemBuffer m_content;
 
-	/// @brief Reset pointers related to the buffer
-	void reset_buffer();
 private:
-	const char* m_read_pos;
-	const char* m_read_end;
+	/// @brief (Invalidate the buffer) Reset pointers related to the buffer
+	/// @param position_buf (The new position value for the members:
+	///        `m_position_buf` and `m_position_next_read`)
+	void reset_buffer(size_t position_buf);
+
+	const char *m_read_pos;
+	const char *m_read_end;
 	inline size_t remaining_bytes_in_buffer() const {
 		return m_read_end - m_read_pos;
 	}
+	inline size_t current_buffer_size() const {
+		return m_read_end - m_buffer;
+	}
 	char m_buffer[buf_size];
-	long seek_before_next_read;
 	/// @brief The position of `m_buffer[0]` in the original file .
 	size_t m_position_buf;
-	size_t m_position;
+	size_t m_position_next_read;
+
+	uint8_t m_optimization_read_backward;
+
+	bool m_enabled_async_seek;
+	long m_pending_async_seek;
+	bool handle_async_seek();
 };
 
 class FileReader : public BaseReader
