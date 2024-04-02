@@ -8,6 +8,21 @@
 
 #include "xls/xlscommon.h"
 
+#ifdef DATADOCS_DEBUG_FILE_IO
+#include "debug.h"
+#define debug_do_read_result(expected_bytes, actual_bytes) {\
+	if (actual_bytes <= 0) {\
+		console_log("do_read(%zu) pos=%zu FAILED", expected_bytes, m_position);\
+	} else {\
+		console_log("do_read(%zu) pos=%zu to=%zu len=%d", \
+		expected_bytes, m_position, m_position + actual_bytes, actual_bytes);\
+	}}
+#define debug_file_io(...) console_log(__VA_ARGS__)
+#else
+#define debug_do_read_result(expected_bytes, actual_bytes)
+#define debug_file_io(...)
+#endif
+
 namespace duckdb {
 
 ///

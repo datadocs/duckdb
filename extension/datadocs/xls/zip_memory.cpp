@@ -1,6 +1,8 @@
+#include "xls/zip_memory.h"
+
 #include <cstring>
 
-#include "xls/zip_memory.h"
+// https://github.com/zlib-ng/minizip-ng/blob/master/mz_compat.c
 
 namespace xls {
 
@@ -88,6 +90,7 @@ long ZCALLBACK zf_seek(voidpf opaque, voidpf stream, uLong offset, int origin) {
 	auto reader = (duckdb::FileReader *)opaque;
 	// auto handle = (duckdb::FileHandle*)stream;
 	long new_pos;
+	debug_file_io("zf_seek(offset=%zu, origin=%d)", offset, origin);
 	switch (origin) {
 	case ZLIB_FILEFUNC_SEEK_CUR:
 		new_pos = reader->tell() + offset;

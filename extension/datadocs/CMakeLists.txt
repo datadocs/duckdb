@@ -44,6 +44,23 @@ function (fetch_dependency name cmake_file)
   endif()
 endfunction()
 
+function(vars_to_definitions target_name var_prefix)
+  get_cmake_property(_varNames VARIABLES)
+  set(_count 0)
+  foreach (_varName ${_varNames})
+    string(REGEX MATCH "^${var_prefix}.*" _matched ${_varName})
+    if (_matched)
+      set(_varValue $ENV{${_varName}})
+      target_compile_definitions(${target_name} PUBLIC "${_varName}=${_varValue}")
+      message(STATUS "Added definition: ${_varName}=${_varValue}")
+      math(EXPR _count "${_count} + 1")
+    endif()
+  endforeach()
+  if(_count GREATER 0)
+    message(STATUS "Total ${_count} definition(s) added to target \"${target_name}\"")
+  endif()
+endfunction()
+
 ###################
 # fetch dependencies
 ###################
@@ -155,6 +172,9 @@ target_link_libraries(datadocs_extension
         PRIVATE expat
         # Publicly link to icu
         PRIVATE icu)
+
+# Add compiler definitions from environment variables
+vars_to_definitions(datadocs_extension DATADOCS_DEBUG_)
 
 if(WIN32)
   target_compile_definitions(datadocs_extension PUBLIC LIBXML_STATIC)
