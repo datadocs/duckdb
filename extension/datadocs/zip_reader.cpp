@@ -27,13 +27,17 @@ public:
 	virtual bool is_file() override { return false; }
 
 protected:
-	virtual bool do_open() override
-	{
+	virtual bool do_open() override {
+		debug_file_io("ZipReader::do_open");
 		m_content.size = 0;
 		unz_file_info64 file_info;
-		if (unzLocateFile(m_zip, m_filename.data(), 0) != UNZ_OK ||
-			unzGetCurrentFileInfo64(m_zip, &file_info, nullptr, 0, nullptr, 0, nullptr, 0) != UNZ_OK ||
-			unzOpenCurrentFile(m_zip) != UNZ_OK)
+		bool failed = unzLocateFile(m_zip, m_filename.data(), 0) != UNZ_OK ||
+		              unzGetCurrentFileInfo64(m_zip, &file_info, nullptr, 0, nullptr, 0, nullptr, 0) != UNZ_OK ||
+		              unzOpenCurrentFile(m_zip) != UNZ_OK;
+		debug_file_io("ZipReader::do_open(%s, %s, size=%zu)",       //
+		              m_filename.c_str(), failed ? "FAILED" : "OK", //
+		              failed ? 0 : file_info.uncompressed_size);
+		if (failed)
 			return false;
 		m_content.size = file_info.uncompressed_size;
 		return true;
@@ -46,12 +50,13 @@ protected:
 
 	virtual int do_read(char* buffer, size_t size) override
 	{
+		// debug_file_io("ZipReader::do_read(%zu)", size);
 		return unzReadCurrentFile(m_zip, buffer, size);
 	}
 
-	virtual bool do_seek(size_t location) override
-	{
-		throw NotImplementedException("do_seek needs to be implemented and tested");
+	virtual bool do_seek(size_t location) override {
+		debug_file_io("ZipReader::do_seek(%zu) NOT_SUPPORTED", location);
+		return false;
 	}
 
 
@@ -164,6 +169,8 @@ bool ZIPParser::select_file(size_t file_number)
 		return m_parser->select_file(file_number);
 	if (file_number >= get_file_count())
 		return false;
+
+	debug_file_io("ZIPParser::select_file(%zu, name=%s)", file_number, m_files[file_number].c_str());
 	m_parser.reset(get_parser_from_reader(std::make_shared<ZIPReader>(m_zip, m_files[file_number])));
 	return static_cast<bool>(m_parser);
 }
