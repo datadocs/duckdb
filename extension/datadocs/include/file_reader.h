@@ -63,6 +63,7 @@ public:
 	size_t tell() const;
 	bool seek(size_t location);
 
+	bool skip_prefix(const std::string_view &prefix);
 	const char* peek_start(size_t length);
 	bool next_char(char& c);
 	bool peek(char& c);
@@ -72,6 +73,9 @@ public:
 
 protected:
 	bool underflow();
+	/// @brief Attempts to refill the internal buffer of the BaseReader object, if necessary,
+	/// to ensure that at least `min(buf_size, desired_bytes)` are available for reading.
+	bool underflow(size_t desired_bytes);
 	virtual bool do_open() = 0;
 	virtual void do_close() = 0;
 	virtual bool do_seek(size_t location) = 0;
@@ -80,12 +84,19 @@ protected:
 	std::string m_filename;
 	xls::MemBuffer m_content;
 
-	const char* m_read_pos;
-	const char* m_read_end;
-	char m_buffer[buf_size];
-	size_t m_position;
 	/// @brief Reset pointers related to the buffer
 	void reset_buffer();
+private:
+	const char* m_read_pos;
+	const char* m_read_end;
+	inline size_t remaining_bytes_in_buffer() const {
+		return m_read_end - m_read_pos;
+	}
+	char m_buffer[buf_size];
+	long seek_before_next_read;
+	/// @brief The position of `m_buffer[0]` in the original file .
+	size_t m_position_buf;
+	size_t m_position;
 };
 
 class FileReader : public BaseReader
