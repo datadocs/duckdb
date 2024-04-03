@@ -3221,38 +3221,77 @@ static const std::vector<ScalarFunctionSet> GetVariantScalarFunctions() {
 	return func_set;
 }
 
+static const void HandleCastFunction(DatabaseInstance &inst) {
+	// add variant casts
+	auto &casts = DBConfig::GetConfig(inst).GetCastFunctions();
+	auto variant_to_any_cost = casts.ImplicitCastCost(DDVariantType, LogicalType::ANY);
+	casts.RegisterCastFunction(DDVariantType, DDVariantType, VariantToAnyCastBind, 0);
+	for (const auto &type : LogicalType::AllTypes()) {
+		LogicalType target_type;
+		switch (type.id()) {
+		case LogicalTypeId::STRUCT:
+			target_type = LogicalType::STRUCT({{"any", LogicalType::ANY}});
+			break;
+		case LogicalTypeId::LIST:
+			target_type = LogicalType::LIST(LogicalType::ANY);
+			break;
+		case LogicalTypeId::MAP:
+			target_type = LogicalType::MAP(LogicalType::ANY, LogicalType::ANY);
+			break;
+		case LogicalTypeId::UNION:
+			target_type = LogicalType::UNION({{"any", LogicalType::ANY}});
+			break;
+		case LogicalTypeId::ARRAY:
+			target_type = LogicalType::ARRAY(LogicalType::ANY);
+			break;
+		default:
+			target_type = type;
+		}
+		const auto variant_to_target_cost = casts.ImplicitCastCost(DDVariantType, target_type);
+		casts.RegisterCastFunction(DDVariantType, target_type, VariantToAnyCastBind, variant_to_target_cost);
+	}
+
+	auto any_to_variant_cost = casts.ImplicitCastCost(LogicalType::ANY, DDVariantType);
+	casts.RegisterCastFunction(DDJsonType, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
+	casts.RegisterCastFunction(DDVariantArrayType, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
+	auto any_to_variant_array_cost = casts.ImplicitCastCost(LogicalType::ANY, DDVariantArrayType);
+	for (const auto &type : LogicalType::AllTypes()) {
+		LogicalType source_type;
+		switch (type.id()) {
+		case LogicalTypeId::STRUCT:
+			source_type = LogicalType::STRUCT({{"any", LogicalType::ANY}});
+			break;
+		case LogicalTypeId::LIST:
+			source_type = LogicalType::LIST(LogicalType::ANY);
+			break;
+		case LogicalTypeId::MAP:
+			source_type = LogicalType::MAP(LogicalType::ANY, LogicalType::ANY);
+			break;
+		case LogicalTypeId::UNION:
+			source_type = LogicalType::UNION({{"any", LogicalType::ANY}});
+			break;
+		case LogicalTypeId::ARRAY:
+			source_type = LogicalType::ARRAY(LogicalType::ANY);
+			break;
+		default:
+			source_type = type;
+		}
+		casts.RegisterCastFunction(source_type, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
+		casts.RegisterCastFunction(source_type, DDVariantArrayType, AnyToVariantArrayCastBind,
+		                           any_to_variant_array_cost);
+	}
+
+	casts.RegisterCastFunction(DDVariantArrayType, DDVariantArrayType, AnyToVariantArrayCastBind, 0);
+	casts.RegisterCastFunction(DDJsonType, DDVariantArrayType, AnyToVariantArrayCastBind, any_to_variant_array_cost);
+	casts.RegisterCastFunction(DDVariantType, DDVariantArrayType, AnyToVariantArrayCastBind, any_to_variant_array_cost);
+}
+
 void DatadocsExtension::LoadVariant(DatabaseInstance &inst) {
 	// add the "variant" type
 	ExtensionUtil::RegisterType(inst, VARIANT_TYPE_NAME, DDVariantType);
 
-	// add variant casts
-	auto &casts = DBConfig::GetConfig(inst).GetCastFunctions();
-	auto variant_to_any_cost = casts.ImplicitCastCost(DDVariantType, LogicalType::ANY);
-	const auto struct_type = LogicalType::STRUCT({{"any", LogicalType::ANY}});
-	const auto list_type = LogicalType::LIST(LogicalType::ANY);
-	casts.RegisterCastFunction(DDVariantType, DDVariantType, VariantToAnyCastBind, 0);
-	casts.RegisterCastFunction(DDVariantType, LogicalType::ANY, VariantToAnyCastBind, variant_to_any_cost);
-	casts.RegisterCastFunction(DDVariantType, struct_type, VariantToAnyCastBind, variant_to_any_cost);
-	casts.RegisterCastFunction(DDVariantType, list_type, VariantToAnyCastBind, variant_to_any_cost);
-
-	auto any_to_variant_cost = casts.ImplicitCastCost(LogicalType::ANY, DDVariantType);
-	casts.RegisterCastFunction(LogicalType::ANY, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
-	casts.RegisterCastFunction(LogicalType::VARCHAR, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
-	casts.RegisterCastFunction(LogicalType::BLOB, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
-	casts.RegisterCastFunction(DDJsonType, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
-	casts.RegisterCastFunction(list_type, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
-	casts.RegisterCastFunction(struct_type, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
-
-	auto any_to_variant_array_cost = casts.ImplicitCastCost(LogicalType::ANY, DDVariantArrayType);
-	casts.RegisterCastFunction(DDVariantArrayType, DDVariantArrayType, AnyToVariantArrayCastBind, 0);
-	casts.RegisterCastFunction(LogicalType::ANY, DDVariantArrayType, AnyToVariantArrayCastBind,
-	                           any_to_variant_array_cost);
-	casts.RegisterCastFunction(LogicalType::VARCHAR, DDVariantArrayType, AnyToVariantArrayCastBind,
-	                           any_to_variant_array_cost);
-	casts.RegisterCastFunction(DDJsonType, DDVariantArrayType, AnyToVariantArrayCastBind, any_to_variant_array_cost);
-	casts.RegisterCastFunction(list_type, DDVariantArrayType, AnyToVariantArrayCastBind, any_to_variant_array_cost);
-	casts.RegisterCastFunction(struct_type, DDVariantArrayType, AnyToVariantArrayCastBind, any_to_variant_array_cost);
-	casts.RegisterCastFunction(DDVariantType, DDVariantArrayType, AnyToVariantArrayCastBind, any_to_variant_array_cost);
+	// Handle Cast function
+	HandleCastFunction(inst);
 
 	ExtensionUtil::RegisterFunction(inst,
 	                                ScalarFunction("variant", {LogicalType::ANY}, DDVariantType, VariantFunction));
