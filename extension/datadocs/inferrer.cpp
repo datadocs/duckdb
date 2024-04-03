@@ -153,7 +153,12 @@ Parser* Parser::get_parser(const std::string& filename, ClientContext &context)
 template <class Parser>
 ParserImpl* create_parser(std::shared_ptr<BaseReader> reader)
 {
-	return new Parser(reader);
+	auto parser = new Parser(reader);
+	if constexpr (std::is_same_v<Parser, XLSXParser> || //
+	             std::is_same_v<Parser, ZIPParser>) {
+		reader->enable_async_seek();
+	}
+	return parser;
 }
 
 static const std::unordered_map<std::string, decltype(&create_parser<CSVParser>)> parser_extensions {
