@@ -122,26 +122,30 @@ bool BaseReader::underflow() {
 		/// Read some bytes backward for optimization.
 		size_t read_back = 0;
 
-		// An optimization for reading the tail
-		size_t len_to_the_tail = filesize() - m_position_next_read;
-		if (len_to_the_tail < buf_size)
-			read_back = buf_size - len_to_the_tail;
-		else if (m_optimization_read_backward >= 2) {
-			read_back = buf_size >> 1; // 1/2 of the buffer
-			m_optimization_read_backward = 0;
-		}
+		if(m_position_next_read > 0) {
+			// The optimization for reading the tail
+			size_t len_to_the_tail = filesize() - m_position_next_read;
+			if (len_to_the_tail < buf_size)
+				read_back = buf_size - len_to_the_tail;
+			// The optimization for backward many times
+			else if (m_optimization_read_backward >= 2) {
+				read_back = buf_size >> 1; // 1/2 of the buffer
+				m_optimization_read_backward = 0;
+			}
 
-		if (m_position_next_read > 0 && read_back > 0) {
-			read_back = std::min(read_back, m_position_next_read);
+			if (read_back > 0) {
+				read_back = std::min(read_back, m_position_next_read);
 
-			size_t location = (size_t)m_position_next_read - read_back;
-			debug_file_io("BaseReader::seek(read_back at %zu) -%zu", m_position_next_read, read_back);
+				size_t location = (size_t)m_position_next_read - read_back;
+				debug_file_io("BaseReader::seek(read_back at %zu) -%zu", m_position_next_read, read_back);
 
-			if (do_seek(location)) {
-				reset_buffer(location);
-			} else {
-				// revert the `read_back` operation due to failed seek attempt
-				read_back = 0;
+				if (do_seek(location)) {
+					reset_buffer(location);
+				} else {
+					// revert the `read_back` operation due to failed seek attempt
+					// The reader may not support `do_seek`
+					read_back = 0;
+				}
 			}
 		}
 

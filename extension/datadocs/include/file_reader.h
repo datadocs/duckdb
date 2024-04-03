@@ -71,6 +71,7 @@ public:
 	bool check_next_char(char c);
 	xls::MemBuffer* read_all();
 	int pos_percent();
+	/// @warning Please only enable this feature for the reader that supports `do_seek`
 	void enable_async_seek() {
 		m_enabled_async_seek = true;
 	}
