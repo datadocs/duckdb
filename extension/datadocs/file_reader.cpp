@@ -13,6 +13,8 @@ BaseReader::BaseReader(const std::string &filename)
 }
 
 BaseReader::~BaseReader() {
+	if(m_is_open)
+		close();
 }
 
 void BaseReader::reset_buffer(size_t position_buf) {
@@ -31,18 +33,32 @@ bool BaseReader::handle_async_seek() {
 }
 
 bool BaseReader::open() {
+	if (m_is_open && do_seek(0)) {
+		debug_file_io("BaseReader::open() WARN: the reader has been opened. "
+					"seeking to the zero position for backward compatibility.");
+		reset_buffer(0);
+		return true;
+	}
+
 	reset_buffer(0);
 	bool ok = do_open();
 	debug_file_io("BaseReader::open(%s, size=%zu, %s%s)", //
 	              filename().c_str(), filesize(),         //
 	              m_enabled_async_seek ? "async_seek, " : "", ok ? "OK" : "FAILED");
+	m_is_open = ok;
 	return ok;
 }
 
 void BaseReader::close() {
+	if (!m_is_open) {
+		debug_file_io("BaseReader::close() WARN: the reader has been closed");
+		return;
+	}
+
 	debug_file_io("BaseReader::close(%s)", filename().c_str());
 	do_close();
 	reset_buffer(0);
+	m_is_open = false;
 }
 
 bool BaseReader::skip_prefix(const std::string_view &prefix) {
@@ -88,29 +104,54 @@ bool BaseReader::check_next_char(char c)
 	return true;
 }
 
-size_t BaseReader::read(char *buffer, size_t size) {
+
+size_t BaseReader::consume_buffer(char *dest, size_t max_bytes) {
+	size_t available_bytes_in_buffer = m_read_end - m_read_pos;
+	if(available_bytes_in_buffer == 0)
+		return 0;
+
+	size_t bytes_from_buffer = std::min(max_bytes, available_bytes_in_buffer);
+	memcpy(dest, m_read_pos, bytes_from_buffer);
+	m_read_pos += bytes_from_buffer;
+	return bytes_from_buffer;
+}
+
+size_t BaseReader::read(char *buffer, size_t size, uint8_t flag) {
 	size_t bytes_remaining = size;
 	size_t bytes_read = 0;
 
-	while (bytes_remaining > 0) {
-		if (!underflow())
-			return bytes_read;
+#define CONSUME_BUFFER_AND_UPDATE_STATE_VARIABLES()                                                                    \
+	{                                                                                                                  \
+		size_t bytes_from_buffer = consume_buffer(buffer, bytes_remaining);                                            \
+		buffer += bytes_from_buffer;                                                                                   \
+		bytes_read += bytes_from_buffer;                                                                               \
+		bytes_remaining -= bytes_from_buffer;                                                                          \
+	}
 
-		size_t available_bytes_in_buffer = m_read_end - m_read_pos;
-		size_t bytes_from_buffer = std::min(bytes_remaining, available_bytes_in_buffer);
-		memcpy(buffer, m_read_pos, bytes_from_buffer);
-		buffer += bytes_from_buffer;
-		bytes_read += bytes_from_buffer;
-		bytes_remaining -= bytes_from_buffer;
+	if ((flag & BASEREADER_READ_FLAG_NO_BUF) || bytes_remaining >= buf_size) {
+		// too many bytes need to be read
+		CONSUME_BUFFER_AND_UPDATE_STATE_VARIABLES();
 
-		m_read_pos += bytes_from_buffer;
+		handle_async_seek();
+		int sz = do_read(buffer, bytes_remaining);
+		debug_do_read_result(bytes_remaining, sz);
+		if (sz > 0) {
+			m_position_next_read += sz;
+			bytes_read += sz;
+		}
+	} else {
+		while (bytes_remaining > 0) {
+			if (!underflow())
+				return bytes_read;
+			CONSUME_BUFFER_AND_UPDATE_STATE_VARIABLES();
+		}
 	}
 	return bytes_read;
 }
 
 /// ```
 /// file: |-- ... ----------|--------------|---- ... --|
-///      head               ↑              |           end
+///      head               ↑              |           tail
 ///              m_position_next_read      |
 ///                  |<---->|              |
 ///                  |   ↑  |              |
