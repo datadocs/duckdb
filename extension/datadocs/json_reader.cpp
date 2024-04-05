@@ -620,7 +620,7 @@ JSONParser::~JSONParser()
 
 bool JSONParser::open()
 {
-	if (!m_reader->is_file() || !m_reader->open()) {
+	if (!m_reader->open()) {
 		return false;
 	}
 	rj_reader.IterativeParseInit();

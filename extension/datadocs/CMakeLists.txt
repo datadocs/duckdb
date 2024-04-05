@@ -175,7 +175,7 @@ target_link_libraries(datadocs_extension
 
 # Add compiler definitions from environment variables
 vars_to_definitions(datadocs_extension DATADOCS_DEBUG_)
-target_compile_definitions(datadocs_extension PUBLIC "DATADOCS_DEBUG_FILE_IO=1")
+# target_compile_definitions(datadocs_extension PUBLIC "DATADOCS_DEBUG_FILE_IO=1")
 
 
 if(WIN32)
