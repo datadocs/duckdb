@@ -54,14 +54,14 @@ namespace std
 namespace duckdb {
 
 const InferrerErrorType InferrerErrorType::NoErrorValue = {};
-	
+
 /* ========= merge with xls_common from master ========= */
 static const double pow_10[] =
 {
 	1e+0,
 	1e+1,  1e+2,  1e+3,  1e+4,  1e+5,  1e+6,  1e+7,  1e+8,  1e+9,  1e+10, 1e+11, 1e+12, 1e+13, 1e+14, 1e+15, 1e+16, 1e+17, 1e+18, 1e+19, 1e+20,
 	1e+21, 1e+22
-}; 
+};
 
 double fast_strtod(const char* str, char **endptr)
 {
@@ -1861,7 +1861,7 @@ bool JSONParser::do_infer_schema()
 	const size_t SAMPLE_SIZE = 1024 * 1024 * 5;
 
 	m_schema.fields.clear();
-	if (!m_reader->is_file() || !m_reader->open())
+	if (!m_reader->open())
 		return false;
 	std::string sample(SAMPLE_SIZE, '\0');
 	sample.resize(m_reader->read(&sample[0], SAMPLE_SIZE));
