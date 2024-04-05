@@ -10,16 +10,25 @@ cmake_minimum_required(VERSION 3.6)
 
 project(zlib-download)
 
+set(DOWNLOADED_PROJECT_FILE "@CMAKE_SOURCE_DIR@/downloaded/zlib-1.2.11.zip")
+if(EXISTS ${DOWNLOADED_PROJECT_FILE})
+  set(ExternalProject_Args URL ${DOWNLOADED_PROJECT_FILE})
+else()
+  set(ExternalProject_Args
+    GIT_REPOSITORY    https://github.com/madler/zlib.git
+    GIT_TAG           v1.2.11
+    GIT_SHALLOW       true 
+  )
+endif()
+
 include(ExternalProject)
 ExternalProject_Add(zlib-download
-  GIT_REPOSITORY    https://github.com/madler/zlib.git
-  GIT_TAG           v1.2.11
-  GIT_SHALLOW       true
-  SOURCE_DIR        "${CMAKE_CURRENT_BINARY_DIR}/zlib"
-  BINARY_DIR        "${CMAKE_CURRENT_BINARY_DIR}/zlib-build"
+  ${ExternalProject_Args}
+  SOURCE_DIR        "@CMAKE_CURRENT_BINARY_DIR@/zlib"
+  BINARY_DIR        "@CMAKE_CURRENT_BINARY_DIR@/zlib-build"
   CONFIGURE_COMMAND ""
   BUILD_COMMAND     ""
   INSTALL_COMMAND   ""
   TEST_COMMAND      ""
-  CMAKE_ARGS        "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+  CMAKE_ARGS        "-DCMAKE_TOOLCHAIN_FILE=@CMAKE_TOOLCHAIN_FILE@"
 )
