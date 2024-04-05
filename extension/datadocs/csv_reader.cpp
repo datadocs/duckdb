@@ -84,6 +84,7 @@ private:
 
 }
 
+/// @brief Unicode Convertor Stream Buffer
 class ucvt_streambuf
 {
 public:
@@ -124,7 +125,7 @@ public:
 	{
 		if (m_read_pos >= m_read_end)
 		{
-			size_t sz = m_reader->read(m_read_buf, read_buf_size);
+			size_t sz = m_reader->read(m_read_buf, read_buf_size, BASEREADER_READ_FLAG_NO_BUF);
 			if (sz == 0 && !m_data_in_converter)
 				return false;
 			m_read_end = m_read_buf + sz;
@@ -197,9 +198,10 @@ bool CSVParser::do_infer_schema()
 	if (!m_reader->open())
 		return false;
 	std::string sample(SAMPLE_SIZE, '\0');
-	sample.resize(m_reader->read(&sample[0], SAMPLE_SIZE));
+	sample.resize(m_reader->read(&sample[0], SAMPLE_SIZE, BASEREADER_READ_FLAG_NO_BUF));
 	bool complete_file = sample.size() >= m_reader->filesize();
-	close();
+	debug_file_io("CSVParser::do_infer_schema() loaded sample, size=%zu", sample.size());
+	// close();
 
 	UErrorCode ustatus = U_ZERO_ERROR;
 	CUCharsetDetector ucsd(ucsdet_open(&ustatus)); if (!U_SUCCESS(ustatus)) return false;
@@ -327,8 +329,8 @@ found_bad_quote:
 	is_inferring = false;
 	m_columns.clear();
 	do_infer_table(comment, rows);
-	close();
-	
+	// close();
+
 //	if (std::regex_match(m_schema.newline, _re_universal_newlines))
 //		m_schema.newline.clear();
 	if (comment != nullptr)
@@ -342,6 +344,8 @@ bool CSVParser::open()
 	m_cvt_buf.reset();
 	if (!m_reader->open())
 		return false;
+
+	debug_file_io("CSVParser::open() charset=%s", m_schema.charset.c_str());
 	if (m_schema.charset == "UTF-8")
 		m_reader->skip_prefix("\xEF\xBB\xBF"sv);
 	else if (m_schema.charset != "ASCII")
@@ -412,7 +416,7 @@ bool CSVParser::underflow()
 		while(n < BUFFER_SIZE && m_cvt_buf->get(start[n]))
 			++n;
 	} else {
-		n = m_reader->read(start, BUFFER_SIZE);
+		n = m_reader->read(start, BUFFER_SIZE, BASEREADER_READ_FLAG_NO_BUF);
 	}
 	read_finished = n < BUFFER_SIZE;
 	if (n == 0) {

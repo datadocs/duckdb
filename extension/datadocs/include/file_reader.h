@@ -24,6 +24,8 @@
 #define debug_file_io(...)
 #endif
 
+#define BASEREADER_READ_FLAG_NO_BUF 0x01
+
 namespace duckdb {
 
 ///
@@ -49,18 +51,19 @@ namespace duckdb {
 class BaseReader
 {
 public:
-	static constexpr size_t buf_size = 8192;
+	static constexpr size_t buf_size = 4096;
 
 	BaseReader(const std::string& filename);
 	virtual ~BaseReader();
 	const std::string& filename() { return m_filename; }
 	size_t filesize() { return m_content.size; }
+	bool is_open() { return m_is_open; }
 	virtual bool is_file() = 0;
 
 	// basic file I/O methods
 	bool open();
 	void close();
-	size_t read(char* buffer, size_t size);
+	size_t read(char* buffer, size_t size, uint8_t flag = 0x00);
 	size_t tell() const;
 	bool seek(size_t location);
 
@@ -88,12 +91,14 @@ protected:
 
 	std::string m_filename;
 	xls::MemBuffer m_content;
+	bool m_is_open = false;
 
 private:
 	/// @brief (Invalidate the buffer) Reset pointers related to the buffer
 	/// @param position_buf (The new position value for the members:
 	///        `m_position_buf` and `m_position_next_read`)
 	void reset_buffer(size_t position_buf);
+	size_t consume_buffer(char* dest, size_t max_bytes);
 
 	const char *m_read_pos;
 	const char *m_read_end;
