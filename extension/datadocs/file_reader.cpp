@@ -9,11 +9,15 @@ namespace duckdb {
 
 BaseReader::BaseReader(const std::string &filename)
     : m_filename(filename), m_optimization_read_backward(0), m_enabled_async_seek(false) {
+	m_buffer = 0;
+	m_buf_size = default_buf_size;
 	reset_buffer(0);
 }
 
 BaseReader::~BaseReader() {
-	if(m_is_open)
+	if (m_buffer)
+		delete[] m_buffer;
+	if (m_is_open)
 		close();
 }
 
@@ -21,6 +25,19 @@ void BaseReader::reset_buffer(size_t position_buf) {
 	m_position_buf = m_position_next_read = position_buf;
 	m_read_pos = m_read_end = m_buffer;
 	m_pending_async_seek = -1;
+}
+
+bool BaseReader::set_buffer_size(size_t size) {
+	if (m_buffer) {
+		debug_file_io("BaseReader::set_buffer_size(%zu) WARN: the buffer has been initialized(size=%zu)", //
+		              size, m_buf_size);
+		return false;
+	}
+	m_buffer = new char[size];
+	m_buf_size = size;
+	reset_buffer(0);
+	debug_file_io("BaseReader::set_buffer_size(%zu)", m_buf_size);
+	return true;
 }
 
 bool BaseReader::handle_async_seek() {
@@ -128,7 +145,8 @@ size_t BaseReader::read(char *buffer, size_t size, uint8_t flag) {
 		bytes_remaining -= bytes_from_buffer;                                                                          \
 	}
 
-	if ((flag & BASEREADER_READ_FLAG_NO_BUF) || bytes_remaining >= buf_size) {
+	if ((flag & BASEREADER_READ_FLAG_NO_BUF) || bytes_remaining >= m_buf_size) {
+		debug_file_io("BaseReader::read(%zu, NO_BUF)", size);
 		// too many bytes need to be read
 		CONSUME_BUFFER_AND_UPDATE_STATE_VARIABLES();
 
@@ -140,6 +158,7 @@ size_t BaseReader::read(char *buffer, size_t size, uint8_t flag) {
 			bytes_read += sz;
 		}
 	} else {
+		debug_file_io("BaseReader::read(%zu, WITH_BUF)", size);
 		while (bytes_remaining > 0) {
 			if (!underflow())
 				return bytes_read;
@@ -166,11 +185,11 @@ bool BaseReader::underflow() {
 		if(m_position_next_read > 0) {
 			// The optimization for reading the tail
 			size_t len_to_the_tail = filesize() - m_position_next_read;
-			if (len_to_the_tail < buf_size)
-				read_back = buf_size - len_to_the_tail;
+			if (len_to_the_tail < m_buf_size)
+				read_back = m_buf_size - len_to_the_tail;
 			// The optimization for backward many times
 			else if (m_optimization_read_backward >= 2) {
-				read_back = buf_size >> 1; // 1/2 of the buffer
+				read_back = m_buf_size >> 1; // 1/2 of the buffer
 				m_optimization_read_backward = 0;
 			}
 
@@ -191,8 +210,10 @@ bool BaseReader::underflow() {
 		}
 
 		handle_async_seek();
-		int sz = do_read(m_buffer, buf_size);
-		debug_do_read_result(buf_size, sz);
+		if (!m_buffer)
+			set_buffer_size(default_buf_size);
+		int sz = do_read(m_buffer, m_buf_size);
+		debug_do_read_result(m_buf_size, sz);
 
 		bool ok = sz > (0 + read_back);
 		if(sz > 0) {
@@ -207,7 +228,7 @@ bool BaseReader::underflow() {
 }
 bool BaseReader::underflow(size_t desired_bytes) {
 	size_t remaining_bytes = remaining_bytes_in_buffer();
-	if (remaining_bytes == 0)
+	if (remaining_bytes == 0 || !m_buffer)
 		return underflow();
 	if (remaining_bytes >= desired_bytes)
 		return true; // The buffer is full, no need to be filled
@@ -221,7 +242,7 @@ bool BaseReader::underflow(size_t desired_bytes) {
 	memmove(m_buffer, m_read_pos, remaining_bytes);
 	m_position_buf += m_read_pos - m_buffer;
 
-	size_t bytes_to_read = buf_size - remaining_bytes;
+	size_t bytes_to_read = m_buf_size - remaining_bytes;
 	char *write_to = m_buffer + remaining_bytes;
 	m_read_pos = m_buffer;
 	m_read_end = write_to;
@@ -251,11 +272,11 @@ xls::MemBuffer* BaseReader::read_all()
 }
 
 size_t BaseReader::tell() const {
-	return m_position_buf + (m_read_pos - m_buffer);
+	return m_position_buf + (m_buffer ? (m_read_pos - m_buffer) : 0);
 }
 
 bool BaseReader::seek(size_t location) {
-	if (location >= m_position_buf && location < m_position_buf + current_buffer_size()) {
+	if (m_buffer && location >= m_position_buf && location < m_position_buf + current_buffer_size()) {
 		// seek in the buffer
 		size_t offset = location - m_position_buf;
 		m_read_pos = m_buffer + offset;
