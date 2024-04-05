@@ -154,9 +154,14 @@ template <class Parser>
 ParserImpl* create_parser(std::shared_ptr<BaseReader> reader)
 {
 	auto parser = new Parser(reader);
-	if constexpr (std::is_same_v<Parser, XLSXParser> || //
-	             std::is_same_v<Parser, ZIPParser>) {
+	// Optimize the file reader to accommodate parsers that require frequent random reading:
+	if constexpr (std::is_same_v<Parser, XLSXParser>) {
+		reader->set_buffer_size(16 * 1024); // 16K
 		reader->enable_async_seek();
+	} else if constexpr (std::is_same_v<Parser, ZIPParser>) {
+		reader->enable_async_seek();
+	} else if constexpr (std::is_same_v<Parser, JSONParser>) {
+		reader->set_buffer_size(1024 * 1024); // 1MB (Because current json reader read 1-4 bytes each time)
 	}
 	return parser;
 }
