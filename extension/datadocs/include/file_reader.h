@@ -28,6 +28,8 @@
 
 namespace duckdb {
 
+// todo file_reader_buff.h BaseReaderBuffer { m_buffer, m_pos_read, m_pos_end, ...  }
+
 ///
 ///  BaseReader
 ///    |---- derive ---> FileReader
@@ -51,7 +53,7 @@ namespace duckdb {
 class BaseReader
 {
 public:
-	static constexpr size_t buf_size = 4096;
+	static constexpr size_t default_buf_size = 1024;
 
 	BaseReader(const std::string& filename);
 	virtual ~BaseReader();
@@ -78,6 +80,7 @@ public:
 	void enable_async_seek() {
 		m_enabled_async_seek = true;
 	}
+	bool set_buffer_size(size_t size);
 
 protected:
 	bool underflow();
@@ -108,7 +111,8 @@ private:
 	inline size_t current_buffer_size() const {
 		return m_read_end - m_buffer;
 	}
-	char m_buffer[buf_size];
+	char *m_buffer;
+	size_t m_buf_size;
 	/// @brief The position of `m_buffer[0]` in the original file .
 	size_t m_position_buf;
 	size_t m_position_next_read;
