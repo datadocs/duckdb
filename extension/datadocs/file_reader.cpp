@@ -193,12 +193,15 @@ bool BaseReader::underflow() {
 		handle_async_seek();
 		int sz = do_read(m_buffer, buf_size);
 		debug_do_read_result(buf_size, sz);
-		if (sz <= 0 + read_back)
-			return false;
-		m_position_buf = m_position_next_read;
-		m_position_next_read += sz;
-		m_read_end = m_buffer + sz;
-		m_read_pos = m_buffer + read_back;
+
+		bool ok = sz > (0 + read_back);
+		if(sz > 0) {
+			m_position_buf = m_position_next_read;
+			m_position_next_read += sz;
+			m_read_end = m_buffer + sz;
+			m_read_pos = m_buffer + read_back;
+		}
+		return ok;
 	}
 	return true;
 }
