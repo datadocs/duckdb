@@ -21,7 +21,7 @@ function (fetch_dependency name cmake_file)
     message(WARNING "${Cyan}Dependency found - not rebuilding - ${CMAKE_CURRENT_BINARY_DIR}/${name}-build${ColorReset}")
   else()
     message("${Cyan}Fetching Dependency '${name}' - ${CMAKE_CURRENT_BINARY_DIR}/${name}-download${ColorReset}")
-    configure_file(${cmake_file} ${name}-download/CMakeLists.txt)
+    configure_file(${cmake_file} ${name}-download/CMakeLists.txt @ONLY)
 
     if(EMSCRIPTEN)
     execute_process(COMMAND emcmake ${CMAKE_COMMAND} -G "${CMAKE_GENERATOR}" .
@@ -175,6 +175,8 @@ target_link_libraries(datadocs_extension
 
 # Add compiler definitions from environment variables
 vars_to_definitions(datadocs_extension DATADOCS_DEBUG_)
+target_compile_definitions(datadocs_extension PUBLIC "DATADOCS_DEBUG_FILE_IO=1")
+
 
 if(WIN32)
   target_compile_definitions(datadocs_extension PUBLIC LIBXML_STATIC)

@@ -10,19 +10,28 @@ cmake_minimum_required(VERSION 3.6)
 
 project(libexpat-download)
 
+set(DOWNLOADED_PROJECT_FILE "@CMAKE_SOURCE_DIR@/downloaded/expat-2.2.10.tar.gz")
+if(EXISTS ${DOWNLOADED_PROJECT_FILE})
+  set(ExternalProject_Args URL ${DOWNLOADED_PROJECT_FILE})
+else()
+  set(ExternalProject_Args
+    URL               "https://github.com/libexpat/libexpat/releases/download/R_2_2_10/expat-2.2.10.tar.gz"
+  )
+endif()
+
 include(ExternalProject)
 ExternalProject_Add(libexpat-download
   # GIT_REPOSITORY    https://github.com/libexpat/libexpat.git
   # GIT_TAG           R_2_2_9
   # GIT_SHALLOW       true
-  URL               "https://github.com/libexpat/libexpat/releases/download/R_2_2_10/expat-2.2.10.tar.gz"
+  ${ExternalProject_Args}
   URL_HASH          SHA256=bf42d1f52371d23684de36cc6d2f0f1acd02de264d1105bdc17792bbeb7e7ceb
-  SOURCE_DIR        "${CMAKE_CURRENT_BINARY_DIR}/libexpat/expat"
-  DOWNLOAD_DIR      "${CMAKE_CURRENT_BINARY_DIR}/libexpat-download"
-  BINARY_DIR        "${CMAKE_CURRENT_BINARY_DIR}/libexpat-build"
+  SOURCE_DIR        "@CMAKE_CURRENT_BINARY_DIR@/libexpat/expat"
+  DOWNLOAD_DIR      "@CMAKE_CURRENT_BINARY_DIR@/libexpat-download"
+  BINARY_DIR        "@CMAKE_CURRENT_BINARY_DIR@/libexpat-build"
   CONFIGURE_COMMAND ""
   BUILD_COMMAND     ""
   INSTALL_COMMAND   ""
   TEST_COMMAND      ""
-  CMAKE_ARGS        "-DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+  CMAKE_ARGS        "-DCMAKE_TOOLCHAIN_FILE=@CMAKE_TOOLCHAIN_FILE@"
 )
