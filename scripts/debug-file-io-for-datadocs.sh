@@ -20,13 +20,15 @@ FILE_PREFIX="debug_file_io_$(date '+%m%d_%H%M%S')";
 LOG_FILE="${FILE_PREFIX}.log";
 EXPORT_FILE="${FILE_PREFIX}.csv";
 
-SQL="copy (select * exclude(__rownum__) from ingest_file('$1')) to '$EXPORT_FILE';"
+# https://duckdb.org/docs/sql/statements/profiling
+SQL="explain analyze copy (select * exclude(__rownum__) from ingest_file('$1')) to '$EXPORT_FILE';"
 
 printf "SQL = ${CYAN}%s${RESET}\n" "${SQL}";
 printf "LOG = ${CYAN}%s${RESET}\n" "${LOG_FILE}";
 
 SECONDS=0
 echo "$SQL" | "$DUCKDB_SHELL" | 
-    awk -v prefix=">>> D7NX >>> " \
-    'index($0, prefix)==1 { print substr($0, length(prefix)+1) }' > "$LOG_FILE"
+    awk -v prefix=">>> D7NX >>> " -v log_file="$LOG_FILE" \
+    'index($0, prefix)==1 { print substr($0, length(prefix)+1)  > log_file; next; }
+    { print $0 > log_file; print $0; }';
 echo "done: +${SECONDS}s"
