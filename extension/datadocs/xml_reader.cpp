@@ -229,7 +229,7 @@ public:
 		length = &entry.length;
 		second_tag();
 	}
-	virtual bool second_tag() override { 
+	virtual bool second_tag() override {
 		cur_row = buffer->GetSize();
 		buffer->Reserve(cur_row + 1);
 		buffer->SetSize(cur_row + 1);
@@ -302,7 +302,7 @@ public:
 			void* buff = XML_GetBuffer(raw_parser, BUFF_SIZE);
 			if (!buff)
 				return false;
-			size_t bytes_read = reader.read((char*)buff, BUFF_SIZE);
+			size_t bytes_read = reader.read((char*)buff, BUFF_SIZE, BASEREADER_READ_FLAG_NO_BUF);
 			auto status = XML_ParseBuffer(raw_parser, bytes_read, bytes_read == 0);
 			if (status == XML_STATUS_SUSPENDED)
 				return true;
