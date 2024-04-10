@@ -6,8 +6,10 @@
 #   A bash script for building DuckDB with the Datadocs extension
 #   (This script has been tested on Ubuntu 22.04 and MacOS Sonoma 14)
 # 
+# Usage: build-duckdb-for-datadocs.sh [debug|cldebug|release|...] [--shell]
+#
 # Author:  Liu Yue @hangxingliu
-# Version: 2024-04-03
+# Version: 2024-04-10
 #
 # Required Softwares:
 #
@@ -38,11 +40,21 @@
 #
 throw() { echo -e "fatal: $1" >&2; exit 1; }
 execute() { echo "$ $*"; "$@" || throw "Failed to execute '$1'"; }
-has_flag() {
-    local flag="$1"; shift;
-    for arg; do [[ "$arg" == "$flag" ]] && return 0; done
-    return 1;
+
+open_duckdb_shell=
+make_target=()
+parse_args() {
+    local arg
+    while [ "${#@}" -gt 0 ]; do
+        arg="$1"; shift;
+        case "$arg" in
+            --shell) open_duckdb_shell=1;;
+            *) make_target+=( "$arg" );;
+        esac
+    done
 }
+parse_args "$@";
+[ "${#make_target[@]}" -gt 0 ] || make_target=( release );
 
 command -v cmake >/dev/null || throw "cmake is not installed!";
 command -v ninja >/dev/null || throw "ninja is not installed!";
@@ -65,11 +77,11 @@ execute export CXX="$(command -v clang++)"
 
 SECONDS=0
 execute export GEN=ninja;
-execute make "-j$(nproc)";
+execute make "-j$(nproc)" "${make_target[@]}";
 
 echo "";
 echo "build done: +${SECONDS}s"
 echo "";
 
 # Executing the built DuckDB shell for testing
-if has_flag "--shell" "${@}"; then execute ./build/release/duckdb; fi
+if [ -n "$open_duckdb_shell" ]; then execute ./build/release/duckdb; fi
