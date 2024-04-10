@@ -385,6 +385,7 @@ bool Parser::select_path(const std::string_view &path) {
 				throw InvalidInputException("File not found: %s", name.data());
 			}
 			start += i + 1;
+			sheet_selected = true;
 		} else {
 			std::string_view name(start, end - start);
 			if (!select_sheet(name)) {
