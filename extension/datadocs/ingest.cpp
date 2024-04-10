@@ -5,8 +5,8 @@
 #include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
-#include "json_common.hpp"
 #include "inferrer_impl.h"
+#include "json_common.hpp"
 
 namespace duckdb {
 
@@ -32,25 +32,56 @@ static unique_ptr<FunctionData> IngestBind(ClientContext &context, TableFunction
 	const string &file_name = StringValue::Get(input.inputs[0]);
 	auto result = make_uniq<IngestBindData>(file_name, context);
 	Parser &parser = *result->parser;
+
+	bool selected_file = false;
+	bool inferred_schema = false;
 	if (input.inputs.size() > 1) {
+		// This function receives two parameters, the second parameter is used to inform
+		// this function about a predefined schema, the path of a nested file ...
+		// Available properties of the second parameter:
+		//
+		//   path: string|string[]     It is used for selecting the nested file/sheet in the given file
+		//   options: unknown          A predefined schema for the parser (WIP)
+		//
 		JSONAllocator alc {Allocator::DefaultAllocator()};
 		auto doc = JSONCommon::ReadDocument(StringValue::Get(input.inputs[1]), JSONCommon::READ_FLAG, alc.GetYYAlc());
 		auto root = yyjson_doc_get_root(doc);
+		if (!root || !yyjson_is_obj(root))
+			throw InvalidInputException("The second parameter is an invalid JSON object");
+
 		yyjson_val *val = yyjson_obj_get(root, "path");
+		bool select_file_ok = true;
 		if (yyjson_is_str(val)) {
-			parser.select_path(std::string_view(unsafe_yyjson_get_str(val), unsafe_yyjson_get_len(val)));
+			select_file_ok =
+			    parser.select_path(std::string_view(unsafe_yyjson_get_str(val), unsafe_yyjson_get_len(val)));
+			selected_file = true;
 		} else if (yyjson_is_arr(val)) {
-			parser.select_path(val);
+			select_file_ok = parser.select_path(val);
+			selected_file = true;
 		}
-		parser.get_schema()->FromJson(root); //yyjson_obj_get(root, "options"));
-	} else {
-		while (parser.get_file_count() > 0) {
-			parser.select_file(0);
+
+		if(!select_file_ok){
+			std::string err_msg = "Cannot select the path: ";
+			char *encoded_path = yyjson_val_write(val, 0, NULL);
+			if (encoded_path) {
+				err_msg += std::string(encoded_path);
+				free(encoded_path);
+			}
+			throw InvalidInputException(err_msg);
 		}
-		if (!parser.infer_schema()) {
-			throw InvalidInputException("Cannot ingest file");
+
+		auto prefined_schema = yyjson_obj_get(root, "options");
+		if (prefined_schema) {
+			parser.get_schema()->FromJson(prefined_schema);
+			inferred_schema = true;
 		}
 	}
+
+	if (!selected_file)
+		while (parser.get_file_count() > 0)
+			parser.select_file(0);
+	if (!inferred_schema && !parser.infer_schema())
+		throw InvalidInputException("Cannot ingest file");
 	parser.BuildColumns();
 	parser.BindSchema(return_types, names);
 	return std::move(result);
