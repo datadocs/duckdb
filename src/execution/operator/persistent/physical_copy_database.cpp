@@ -25,7 +25,7 @@ PhysicalCopyDatabase::~PhysicalCopyDatabase() {
 //===--------------------------------------------------------------------===//
 SourceResultType PhysicalCopyDatabase::GetData(ExecutionContext &context, DataChunk &chunk,
                                                OperatorSourceInput &input) const {
-	auto &catalog = info->to_database;
+	auto &catalog = Catalog::GetCatalog(context.client, info->target_database);
 	for (auto &create_info : info->entries) {
 		switch (create_info->type) {
 		case CatalogType::SCHEMA_ENTRY:
@@ -49,8 +49,10 @@ SourceResultType PhysicalCopyDatabase::GetData(ExecutionContext &context, DataCh
 			catalog.CreateTable(context.client, *bound_info);
 			break;
 		}
+		case CatalogType::INDEX_ENTRY:
 		default:
-			throw InternalException("Entry type not supported in PhysicalCopyDatabase");
+			throw NotImplementedException("Entry type %s not supported in PhysicalCopyDatabase",
+			                              CatalogTypeToString(create_info->type));
 		}
 	}
 	return SourceResultType::FINISHED;

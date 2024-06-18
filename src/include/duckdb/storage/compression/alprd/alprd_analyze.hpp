@@ -14,6 +14,7 @@
 #include "duckdb/storage/compression/alprd/alprd_constants.hpp"
 #include "duckdb/storage/compression/alp/alp_utils.hpp"
 #include "duckdb/storage/compression/alp/alp_constants.hpp"
+#include "duckdb/common/numeric_utils.hpp"
 
 #include <cmath>
 
@@ -22,7 +23,7 @@ namespace duckdb {
 template <class T>
 struct AlpRDAnalyzeState : public AnalyzeState {
 public:
-	using EXACT_TYPE = typename FloatingToExact<T>::type;
+	using EXACT_TYPE = typename FloatingToExact<T>::TYPE;
 
 	AlpRDAnalyzeState() : state() {
 	}
@@ -44,7 +45,7 @@ unique_ptr<AnalyzeState> AlpRDInitAnalyze(ColumnData &col_data, PhysicalType typ
  */
 template <class T>
 bool AlpRDAnalyze(AnalyzeState &state, Vector &input, idx_t count) {
-	using EXACT_TYPE = typename FloatingToExact<T>::type;
+	using EXACT_TYPE = typename FloatingToExact<T>::TYPE;
 	auto &analyze_state = (AlpRDAnalyzeState<T> &)state;
 
 	bool must_skip_current_vector = alp::AlpUtils::MustSkipSamplingFromCurrentVector(
@@ -82,7 +83,7 @@ bool AlpRDAnalyze(AnalyzeState &state, Vector &input, idx_t count) {
 			current_vector_sample[sample_idx] = value;
 			//! We resolve null values with a predicated comparison
 			bool is_null = !vdata.validity.RowIsValid(idx);
-			current_vector_null_positions[nulls_idx] = sample_idx;
+			current_vector_null_positions[nulls_idx] = UnsafeNumericCast<uint16_t>(sample_idx);
 			nulls_idx += is_null;
 			sample_idx++;
 		}
@@ -108,6 +109,9 @@ bool AlpRDAnalyze(AnalyzeState &state, Vector &input, idx_t count) {
 template <class T>
 idx_t AlpRDFinalAnalyze(AnalyzeState &state) {
 	auto &analyze_state = (AlpRDAnalyzeState<T> &)state;
+	if (analyze_state.total_values_count == 0) {
+		return DConstants::INVALID_INDEX;
+	}
 	double factor_of_sampling = 1 / ((double)analyze_state.rowgroup_sample.size() / analyze_state.total_values_count);
 
 	// Finding which is the best dictionary for the sample
@@ -122,13 +126,15 @@ idx_t AlpRDFinalAnalyze(AnalyzeState &state) {
 	//! Overhead per vector: Pointer to data + Exceptions count
 	double per_vector_overhead = AlpRDConstants::METADATA_POINTER_SIZE + AlpRDConstants::EXCEPTIONS_COUNT_SIZE;
 
-	uint32_t n_vectors = std::ceil((double)analyze_state.total_values_count / AlpRDConstants::ALP_VECTOR_SIZE);
+	uint32_t n_vectors =
+	    NumericCast<uint32_t>(std::ceil((double)analyze_state.total_values_count / AlpRDConstants::ALP_VECTOR_SIZE));
 
 	auto estimated_size = (estimed_compressed_bytes * factor_of_sampling) + (n_vectors * per_vector_overhead);
-	uint32_t estimated_n_blocks = std::ceil(estimated_size / (Storage::BLOCK_SIZE - per_segment_overhead));
+	uint32_t estimated_n_blocks =
+	    NumericCast<uint32_t>(std::ceil(estimated_size / (Storage::BLOCK_SIZE - per_segment_overhead)));
 
 	auto final_analyze_size = estimated_size + (estimated_n_blocks * per_segment_overhead);
-	return final_analyze_size;
+	return NumericCast<idx_t>(final_analyze_size);
 }
 
 } // namespace duckdb

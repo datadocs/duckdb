@@ -82,7 +82,7 @@ void CheckForPerfectJoinOpt(LogicalComparisonJoin &op, PerfectHashJoinStats &joi
 	}
 
 	// and when the build range is smaller than the threshold
-	auto &stats_build = *op.join_stats[0].get(); // lhs stats
+	auto &stats_build = *op.join_stats[1].get(); // rhs stats
 	if (!NumericStats::HasMinMax(stats_build)) {
 		return;
 	}
@@ -97,7 +97,7 @@ void CheckForPerfectJoinOpt(LogicalComparisonJoin &op, PerfectHashJoinStats &joi
 	}
 
 	// Fill join_stats for invisible join
-	auto &stats_probe = *op.join_stats[1].get(); // rhs stats
+	auto &stats_probe = *op.join_stats[0].get(); // lhs stats
 	if (!NumericStats::HasMinMax(stats_probe)) {
 		return;
 	}
@@ -109,7 +109,7 @@ void CheckForPerfectJoinOpt(LogicalComparisonJoin &op, PerfectHashJoinStats &joi
 	join_state.build_min = NumericStats::Min(stats_build);
 	join_state.build_max = NumericStats::Max(stats_build);
 	join_state.estimated_cardinality = op.estimated_cardinality;
-	join_state.build_range = build_range;
+	join_state.build_range = NumericCast<idx_t>(build_range);
 	if (join_state.build_range > MAX_BUILD_SIZE) {
 		return;
 	}

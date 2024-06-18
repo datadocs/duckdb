@@ -30,6 +30,10 @@ void InitializeStaticMethods(py::module_ &m) {
 	// Function Expression
 	docs = "";
 	m.def("FunctionExpression", &DuckDBPyExpression::FunctionExpression, py::arg("function_name"), docs);
+
+	// Coalesce Operator
+	docs = "";
+	m.def("CoalesceOperator", &DuckDBPyExpression::Coalesce, docs);
 }
 
 static void InitializeDunderMethods(py::class_<DuckDBPyExpression, shared_ptr<DuckDBPyExpression>> &m) {
@@ -298,7 +302,23 @@ void DuckDBPyExpression::Initialize(py::module_ &m) {
 	expression.def("nulls_last", &DuckDBPyExpression::NullsLast, docs);
 
 	docs = R"(
-		Return a IN expression comparing self to the input arguments.
+		Create a binary IS NULL expression from self
+
+		Returns:
+			DuckDBPyExpression: self IS NULL
+	)";
+	expression.def("isnull", &DuckDBPyExpression::IsNull, docs);
+
+	docs = R"(
+		Create a binary IS NOT NULL expression from self
+
+		Returns:
+			DuckDBPyExpression: self IS NOT NULL
+	)";
+	expression.def("isnotnull", &DuckDBPyExpression::IsNotNull, docs);
+
+	docs = R"(
+		Return an IN expression comparing self to the input arguments.
 
 		Returns:
 			DuckDBPyExpression: The compare IN expression

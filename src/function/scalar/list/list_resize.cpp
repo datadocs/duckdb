@@ -9,7 +9,8 @@ namespace duckdb {
 void ListResizeFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.data[1].GetType().id() == LogicalTypeId::UBIGINT);
 	if (result.GetType().id() == LogicalTypeId::SQLNULL) {
-		FlatVector::SetNull(result, 0, true);
+		result.SetVectorType(VectorType::CONSTANT_VECTOR);
+		ConstantVector::SetNull(result, true);
 		return;
 	}
 	D_ASSERT(result.GetType().id() == LogicalTypeId::LIST);
@@ -27,7 +28,7 @@ void ListResizeFunction(DataChunk &args, ExpressionState &state, Vector &result)
 
 	UnifiedVectorFormat new_size_data;
 	new_sizes.ToUnifiedFormat(count, new_size_data);
-	auto new_size_entries = UnifiedVectorFormat::GetData<int64_t>(new_size_data);
+	auto new_size_entries = UnifiedVectorFormat::GetData<uint64_t>(new_size_data);
 
 	UnifiedVectorFormat child_data;
 	child.ToUnifiedFormat(count, child_data);
@@ -46,6 +47,7 @@ void ListResizeFunction(DataChunk &args, ExpressionState &state, Vector &result)
 	optional_ptr<Vector> default_vector;
 	if (args.ColumnCount() == 3) {
 		default_vector = &args.data[2];
+		default_vector->Flatten(count);
 		default_vector->ToUnifiedFormat(count, default_data);
 		default_vector->SetVectorType(VectorType::CONSTANT_VECTOR);
 	}

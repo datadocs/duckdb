@@ -40,8 +40,8 @@ function _close_result(result::QueryResult)
     return
 end
 
-mutable struct ColumnConversionData
-    chunks::Vector{DataChunk}
+mutable struct ColumnConversionData{ChunksT <: Union{Vector{DataChunk}, Tuple{DataChunk}}}
+    chunks::ChunksT
     col_idx::Int64
     logical_type::LogicalType
     conversion_data::Any
@@ -92,7 +92,13 @@ end
 function convert_time_tz(column_data::ColumnConversionData, val::UInt64)::Time
     time_tz = duckdb_from_time_tz(val)
     # TODO: how to preserve the offset?
-    return Dates.Time(Dates.Nanosecond(time_tz.micros * 1000))
+    return Dates.Time(
+        time_tz.time.hour,
+        time_tz.time.min,
+        time_tz.time.sec,
+        time_tz.time.micros ÷ 1000,
+        time_tz.time.micros % 1000
+    )
 end
 
 function convert_timestamp(column_data::ColumnConversionData, val::Int64)::DateTime
@@ -634,17 +640,17 @@ function _close_pending_result(pending::PendingQueryResult)
     return
 end
 
-function fetch_error(stmt::Stmt, error_ptr)
+function fetch_error(sql::AbstractString, error_ptr)
     if error_ptr == C_NULL
-        return string("Execute of query \"", stmt.sql, "\" failed: unknown error")
+        return string("Execute of query \"", sql, "\" failed: unknown error")
     else
-        return string("Execute of query \"", stmt.sql, "\" failed: ", unsafe_string(error_ptr))
+        return string("Execute of query \"", sql, "\" failed: ", unsafe_string(error_ptr))
     end
 end
 
 function get_error(stmt::Stmt, pending::PendingQueryResult)
     error_ptr = duckdb_pending_error(pending.handle)
-    error_message = fetch_error(stmt, error_ptr)
+    error_message = fetch_error(stmt.sql, error_ptr)
     _close_pending_result(pending)
     return error_message
 end
@@ -762,7 +768,7 @@ function execute(stmt::Stmt, params::DBInterface.StatementParams = ())
     ret = duckdb_execute_pending(pending.handle, handle)
     if ret != DuckDBSuccess
         error_ptr = duckdb_result_error(handle)
-        error_message = fetch_error(stmt, error_ptr)
+        error_message = fetch_error(stmt.sql, error_ptr)
         duckdb_destroy_result(handle)
         throw(QueryException(error_message))
     end
@@ -797,6 +803,65 @@ DBInterface.close!(q::QueryResult) = _close_result(q)
 
 Base.iterate(q::QueryResult) = iterate(Tables.rows(Tables.columns(q)))
 Base.iterate(q::QueryResult, state) = iterate(Tables.rows(Tables.columns(q)), state)
+
+struct QueryResultChunk
+    tbl::NamedTuple
+end
+
+function Tables.columns(chunk::QueryResultChunk)
+    return Tables.CopiedColumns(chunk.tbl)
+end
+
+Tables.istable(::Type{QueryResultChunk}) = true
+Tables.isrowtable(::Type{QueryResultChunk}) = true
+Tables.columnaccess(::Type{QueryResultChunk}) = true
+Tables.schema(chunk::QueryResultChunk) = Tables.Schema(chunk.q.names, chunk.q.types)
+
+struct QueryResultChunkIterator
+    q::QueryResult
+    column_count::UInt64
+end
+
+function next_chunk(iter::QueryResultChunkIterator)
+    chunk = DuckDB.nextDataChunk(iter.q)
+    if chunk === missing
+        return nothing
+    end
+
+    return QueryResultChunk(
+        NamedTuple{Tuple(iter.q.names)}(ntuple(iter.column_count) do i
+            logical_type = LogicalType(duckdb_column_logical_type(iter.q.handle, i))
+            column_data = ColumnConversionData((chunk,), i, logical_type, nothing)
+            return convert_column(column_data)
+        end)
+    )
+end
+
+Base.iterate(iter::QueryResultChunkIterator) = iterate(iter, 0x0000000000000001)
+
+function Base.iterate(iter::QueryResultChunkIterator, state)
+    if iter.q.chunk_index != state
+        throw(
+            NotImplementedException(
+                "Iterating chunks more than once is not supported. " *
+                "(Did you iterate the result of Tables.partitions() once already, call nextDataChunk or materialise QueryResult?)"
+            )
+        )
+    end
+    chunk = next_chunk(iter)
+    if chunk === nothing
+        return nothing
+    end
+    return (chunk, state + 1)
+end
+
+Base.IteratorSize(::Type{QueryResultChunkIterator}) = Base.SizeUnknown()
+Base.eltype(iter::QueryResultChunkIterator) = Any
+
+function Tables.partitions(q::QueryResult)
+    column_count = duckdb_column_count(q.handle)
+    return QueryResultChunkIterator(q, column_count)
+end
 
 function nextDataChunk(q::QueryResult)::Union{Missing, DataChunk}
     if duckdb_result_is_streaming(q.handle[])
@@ -857,3 +922,21 @@ DBInterface.execute(db::DB, sql::AbstractString, result_type::Type) =
     DBInterface.execute(db.main_connection, sql, result_type)
 
 Base.show(io::IO, result::DuckDB.QueryResult) = print(io, Tables.columntable(result))
+
+"""
+Executes a SQL query within a connection and returns the full (materialized) result. 
+
+The query function is able to run queries with multiple statements, unlike `DBInterface.execute`(@ref) which is only able to prepare a single statement.
+"""
+function query(con::DuckDB.Connection, sql::AbstractString)
+    handle = Ref{duckdb_result}()
+    ret = duckdb_query(con.handle, sql, handle)
+    if ret != DuckDBSuccess
+        error_ptr = duckdb_result_error(handle)
+        error_message = fetch_error(sql, error_ptr)
+        duckdb_destroy_result(handle)
+        throw(QueryException(error_message))
+    end
+    return QueryResult(handle)
+end
+query(db::DuckDB.DB, sql::AbstractString) = query(db.main_connection, sql)

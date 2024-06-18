@@ -23,7 +23,8 @@ enum class AlterType : uint8_t {
 	CHANGE_OWNERSHIP = 4,
 	ALTER_SCALAR_FUNCTION = 5,
 	ALTER_TABLE_FUNCTION = 6,
-	SET_COMMENT = 7
+	SET_COMMENT = 7,
+	SET_COLUMN_COMMENT = 8
 };
 
 struct AlterEntryData {
@@ -63,6 +64,7 @@ public:
 public:
 	virtual CatalogType GetCatalogType() const = 0;
 	virtual unique_ptr<AlterInfo> Copy() const = 0;
+	virtual string ToString() const = 0;
 
 	void Serialize(Serializer &serializer) const override;
 	static unique_ptr<ParseInfo> Deserialize(Deserializer &deserializer);

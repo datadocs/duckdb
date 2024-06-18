@@ -1,3 +1,4 @@
+#include "duckdb/common/numeric_utils.hpp"
 #include "duckdb/common/sort/sort.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/types/list_segment.hpp"
@@ -519,7 +520,7 @@ struct SortedAggregateFunction {
 				order_state->sel.Initialize(sel_data.data() + order_state->offset);
 				start += order_state->nsel;
 			}
-			sel_data[order_state->offset++] = sidx;
+			sel_data[order_state->offset++] = UnsafeNumericCast<sel_t>(sidx);
 		}
 
 		// Append nonempty slices to the arguments
@@ -537,7 +538,7 @@ struct SortedAggregateFunction {
 	template <class STATE, class OP>
 	static void Combine(const STATE &source, STATE &target, AggregateInputData &aggr_input_data) {
 		auto &order_bind = aggr_input_data.bind_data->Cast<SortedAggregateBindData>();
-		auto &other = const_cast<STATE &>(source);
+		auto &other = const_cast<STATE &>(source); // NOLINT: absorb explicitly allows destruction
 		target.Absorb(order_bind, other);
 	}
 
@@ -603,7 +604,7 @@ struct SortedAggregateFunction {
 			if (unsorted_count < order_bind.threshold) {
 				auto state = sdata[finalized];
 				prefixed.Reset();
-				prefixed.data[0].Reference(Value::USMALLINT(finalized));
+				prefixed.data[0].Reference(Value::USMALLINT(UnsafeNumericCast<uint16_t>(finalized)));
 				state->Finalize(order_bind, prefixed, *local_sort);
 				unsorted_count += state_unprocessed[finalized];
 

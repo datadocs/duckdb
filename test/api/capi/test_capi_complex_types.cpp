@@ -1,6 +1,7 @@
 #include "capi_tester.hpp"
 #include "duckdb/main/database_manager.hpp"
 #include "duckdb/parser/parsed_data/create_type_info.hpp"
+#include "duckdb/transaction/meta_transaction.hpp"
 
 using namespace duckdb;
 using namespace std;
@@ -274,7 +275,9 @@ TEST_CASE("Logical types with aliases", "[capi]") {
 	CreateTypeInfo info(type_name, id);
 
 	auto &catalog_name = DatabaseManager::GetDefaultDatabase(*connection->context);
+	auto &transaction = MetaTransaction::Get(*connection->context);
 	auto &catalog = Catalog::GetCatalog(*connection->context, catalog_name);
+	transaction.ModifyDatabase(catalog.GetAttached());
 	catalog.CreateType(*connection->context, info);
 
 	connection->Commit();
@@ -291,6 +294,7 @@ TEST_CASE("Logical types with aliases", "[capi]") {
 		REQUIRE(logical_type);
 
 		auto alias = duckdb_logical_type_get_alias(logical_type);
+		REQUIRE(alias);
 		REQUIRE(string(alias) == "test_type");
 		duckdb_free(alias);
 
@@ -464,4 +468,42 @@ TEST_CASE("Test Infinite Dates", "[capi]") {
 		REQUIRE(!duckdb_is_finite_timestamp(ts));
 		REQUIRE(ts.micros > 0);
 	}
+}
+
+TEST_CASE("Array type construction") {
+	CAPITester tester;
+	REQUIRE(tester.OpenDatabase(nullptr));
+
+	auto child_type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
+	auto array_type = duckdb_create_array_type(child_type, 3);
+
+	REQUIRE(duckdb_array_type_array_size(array_type) == 3);
+
+	auto get_child_type = duckdb_array_type_child_type(array_type);
+	REQUIRE(duckdb_get_type_id(get_child_type) == DUCKDB_TYPE_INTEGER);
+	duckdb_destroy_logical_type(&get_child_type);
+
+	duckdb_destroy_logical_type(&child_type);
+	duckdb_destroy_logical_type(&array_type);
+}
+
+TEST_CASE("Array value construction") {
+	CAPITester tester;
+	REQUIRE(tester.OpenDatabase(nullptr));
+
+	auto child_type = duckdb_create_logical_type(DUCKDB_TYPE_INTEGER);
+
+	duckdb::vector<duckdb_value> values;
+	values.push_back(duckdb_create_int64(42));
+	values.push_back(duckdb_create_int64(43));
+	values.push_back(duckdb_create_int64(44));
+
+	auto array_value = duckdb_create_array_value(child_type, values.data(), values.size());
+	REQUIRE(array_value);
+
+	duckdb_destroy_logical_type(&child_type);
+	for (auto &val : values) {
+		duckdb_destroy_value(&val);
+	}
+	duckdb_destroy_value(&array_value);
 }

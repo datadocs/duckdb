@@ -166,7 +166,7 @@ struct StringMinMaxBase : public MinMaxBase {
 			auto ptr = new char[len];
 			memcpy(ptr, input.GetData(), len);
 
-			state.value = string_t(ptr, len);
+			state.value = string_t(ptr, UnsafeNumericCast<uint32_t>(len));
 		}
 	}
 
@@ -457,7 +457,7 @@ struct VectorMinMaxBase {
 			state.value = new Vector(input.GetType());
 			state.value->SetVectorType(VectorType::CONSTANT_VECTOR);
 		}
-		sel_t selv = idx;
+		sel_t selv = UnsafeNumericCast<sel_t>(idx);
 		SelectionVector sel(&selv);
 		VectorOperations::Copy(input, *state.value, sel, 1, 0, 0);
 	}
@@ -487,7 +487,7 @@ struct VectorMinMaxBase {
 			if (!state.value) {
 				Assign(state, input, i);
 			} else {
-				OP::template Execute(state, input, i, count);
+				OP::template Execute<STATE>(state, input, i, count);
 			}
 		}
 	}
@@ -499,7 +499,7 @@ struct VectorMinMaxBase {
 		} else if (!target.value) {
 			Assign(target, *source.value, 0);
 		} else {
-			OP::template Execute(target, *source.value, 0, 1);
+			OP::template Execute<STATE>(target, *source.value, 0, 1);
 		}
 	}
 
@@ -607,12 +607,12 @@ unique_ptr<FunctionData> BindMinMax(ClientContext &context, AggregateFunction &f
 			FunctionBinder function_binder(context);
 			vector<LogicalType> types {arguments[0]->return_type, arguments[0]->return_type};
 			ErrorData error;
-			idx_t best_function = function_binder.BindFunction(func_entry.name, func_entry.functions, types, error);
-			if (best_function == DConstants::INVALID_INDEX) {
+			auto best_function = function_binder.BindFunction(func_entry.name, func_entry.functions, types, error);
+			if (!best_function.IsValid()) {
 				throw BinderException(string("Fail to find corresponding function for collation min/max: ") +
 				                      error.Message());
 			}
-			function = func_entry.functions.GetFunctionByOffset(best_function);
+			function = func_entry.functions.GetFunctionByOffset(best_function.GetIndex());
 
 			// Create a copied child and PushCollation for it.
 			arguments.push_back(arguments[0]->Copy());

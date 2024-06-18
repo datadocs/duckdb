@@ -177,6 +177,15 @@ void InterpretedBenchmark::LoadBenchmark() {
 				throw std::runtime_error(reader.FormatException("require requires a single parameter"));
 			}
 			extensions.insert(splits[1]);
+		} else if (splits[0] == "resultmode") {
+			if (splits.size() != 2) {
+				throw std::runtime_error(reader.FormatException("resultmode requires a single parameter"));
+			}
+			if (splits[1] != "streaming") {
+				throw std::runtime_error(
+				    reader.FormatException("Invalid argument for resultmode, valid option is 'streaming'"));
+			}
+			streaming = true;
 		} else if (splits[0] == "cache") {
 			if (splits.size() == 2) {
 				cache_db = splits[1];
@@ -186,6 +195,11 @@ void InterpretedBenchmark::LoadBenchmark() {
 			} else {
 				throw std::runtime_error(
 				    reader.FormatException("cache requires a db file, and optionally a no_connect"));
+			}
+			if (StringUtil::EndsWith(cache_db, ".csv") || StringUtil::EndsWith(cache_db, ".parquet") ||
+			    StringUtil::EndsWith(cache_db, ".csv.gz")) {
+				cache_file = cache_db;
+				cache_db = string();
 			}
 		} else if (splits[0] == "storage") {
 			if (splits.size() != 2) {
@@ -353,7 +367,13 @@ unique_ptr<BenchmarkState> InterpretedBenchmark::Initialize(BenchmarkConfigurati
 		load_query = queries["load"];
 	}
 
-	if (cache_db.empty() && cache_db.compare(DEFAULT_DB_PATH) != 0) {
+	if (!cache_file.empty()) {
+		auto fs = FileSystem::CreateLocal();
+		if (!fs->FileExists(fs->JoinPath(BenchmarkRunner::DUCKDB_BENCHMARK_DIRECTORY, cache_file))) {
+			// no cache or db_path specified: just run the initialization code
+			result = state->con.Query(load_query);
+		}
+	} else if (cache_db.empty() && cache_db.compare(DEFAULT_DB_PATH) != 0) {
 		// no cache or db_path specified: just run the initialization code
 		result = state->con.Query(load_query);
 	} else {
@@ -410,7 +430,14 @@ string InterpretedBenchmark::GetQuery() {
 
 void InterpretedBenchmark::Run(BenchmarkState *state_p) {
 	auto &state = (InterpretedBenchmarkState &)*state_p;
-	state.result = state.con.Query(run_query);
+	auto &context = state.con.context;
+	auto temp_result = context->Query(run_query, streaming);
+	if (temp_result->type == QueryResultType::STREAM_RESULT) {
+		auto &stream_query = temp_result->Cast<StreamQueryResult>();
+		state.result = stream_query.Materialize();
+	} else {
+		state.result = unique_ptr_cast<duckdb::QueryResult, duckdb::MaterializedQueryResult>(std::move(temp_result));
+	}
 }
 
 void InterpretedBenchmark::Cleanup(BenchmarkState *state_p) {

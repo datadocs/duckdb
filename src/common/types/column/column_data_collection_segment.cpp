@@ -7,7 +7,7 @@ namespace duckdb {
 ColumnDataCollectionSegment::ColumnDataCollectionSegment(shared_ptr<ColumnDataAllocator> allocator_p,
                                                          vector<LogicalType> types_p)
     : allocator(std::move(allocator_p)), types(std::move(types_p)), count(0),
-      heap(make_shared<StringHeap>(allocator->GetAllocator())) {
+      heap(make_shared_ptr<StringHeap>(allocator->GetAllocator())) {
 }
 
 idx_t ColumnDataCollectionSegment::GetDataSize(idx_t type_size) {
@@ -253,6 +253,11 @@ idx_t ColumnDataCollectionSegment::ChunkCount() const {
 idx_t ColumnDataCollectionSegment::SizeInBytes() const {
 	D_ASSERT(!allocator->IsShared());
 	return allocator->SizeInBytes() + heap->SizeInBytes();
+}
+
+idx_t ColumnDataCollectionSegment::AllocationSize() const {
+	D_ASSERT(!allocator->IsShared());
+	return allocator->AllocationSize() + heap->AllocationSize();
 }
 
 void ColumnDataCollectionSegment::FetchChunk(idx_t chunk_idx, DataChunk &result) {

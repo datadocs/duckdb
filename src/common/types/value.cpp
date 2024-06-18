@@ -133,6 +133,10 @@ Value::Value(int32_t val) : type_(LogicalType::INTEGER), is_null(false) {
 	value_.integer = val;
 }
 
+Value::Value(bool val) : type_(LogicalType::BOOLEAN), is_null(false) {
+	value_.boolean = val;
+}
+
 Value::Value(int64_t val) : type_(LogicalType::BIGINT), is_null(false) {
 	value_.bigint = val;
 }
@@ -158,7 +162,7 @@ Value::Value(string val) : type_(LogicalType::VARCHAR), is_null(false) {
 	if (!Value::StringIsValid(val.c_str(), val.size())) {
 		throw ErrorManager::InvalidUnicodeError(val, "value construction");
 	}
-	value_info_ = make_shared<StringValueInfo>(std::move(val));
+	value_info_ = make_shared_ptr<StringValueInfo>(std::move(val));
 }
 
 Value::~Value() {
@@ -226,10 +230,16 @@ Value Value::MinimumValue(const LogicalType &type) {
 	case LogicalTypeId::TIMESTAMP:
 		return Value::TIMESTAMP(Date::FromDate(Timestamp::MIN_YEAR, Timestamp::MIN_MONTH, Timestamp::MIN_DAY),
 		                        dtime_t(0));
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return MinimumValue(LogicalType::TIMESTAMP).DefaultCastAs(LogicalType::TIMESTAMP_S);
-	case LogicalTypeId::TIMESTAMP_MS:
-		return MinimumValue(LogicalType::TIMESTAMP).DefaultCastAs(LogicalType::TIMESTAMP_MS);
+	case LogicalTypeId::TIMESTAMP_SEC: {
+		//	Casting rounds up, which will overflow
+		const auto min_us = MinimumValue(LogicalType::TIMESTAMP).GetValue<timestamp_t>();
+		return Value::TIMESTAMPSEC(timestamp_t(Timestamp::GetEpochSeconds(min_us)));
+	}
+	case LogicalTypeId::TIMESTAMP_MS: {
+		//	Casting rounds up, which will overflow
+		const auto min_us = MinimumValue(LogicalType::TIMESTAMP).GetValue<timestamp_t>();
+		return Value::TIMESTAMPMS(timestamp_t(Timestamp::GetEpochMs(min_us)));
+	}
 	case LogicalTypeId::TIMESTAMP_NS:
 		return Value::TIMESTAMPNS(timestamp_t(NumericLimits<int64_t>::Minimum()));
 	case LogicalTypeId::TIME_TZ:
@@ -299,12 +309,18 @@ Value Value::MaximumValue(const LogicalType &type) {
 		return Value::TIME(dtime_t(Interval::MICROS_PER_DAY));
 	case LogicalTypeId::TIMESTAMP:
 		return Value::TIMESTAMP(timestamp_t(NumericLimits<int64_t>::Maximum() - 1));
-	case LogicalTypeId::TIMESTAMP_MS:
-		return MaximumValue(LogicalType::TIMESTAMP).DefaultCastAs(LogicalType::TIMESTAMP_MS);
+	case LogicalTypeId::TIMESTAMP_MS: {
+		//	Casting rounds up, which will overflow
+		const auto max_us = MaximumValue(LogicalType::TIMESTAMP).GetValue<timestamp_t>();
+		return Value::TIMESTAMPMS(timestamp_t(Timestamp::GetEpochMs(max_us)));
+	}
 	case LogicalTypeId::TIMESTAMP_NS:
 		return Value::TIMESTAMPNS(timestamp_t(NumericLimits<int64_t>::Maximum() - 1));
-	case LogicalTypeId::TIMESTAMP_SEC:
-		return MaximumValue(LogicalType::TIMESTAMP).DefaultCastAs(LogicalType::TIMESTAMP_S);
+	case LogicalTypeId::TIMESTAMP_SEC: {
+		//	Casting rounds up, which will overflow
+		const auto max_us = MaximumValue(LogicalType::TIMESTAMP).GetValue<timestamp_t>();
+		return Value::TIMESTAMPSEC(timestamp_t(Timestamp::GetEpochSeconds(max_us)));
+	}
 	case LogicalTypeId::TIME_TZ:
 		//	"24:00:00-1559" from the PG docs but actually "24:00:00-15:59:59"
 		return Value::TIMETZ(dtime_tz_t(dtime_t(Interval::MICROS_PER_DAY), dtime_tz_t::MIN_OFFSET));
@@ -330,8 +346,10 @@ Value Value::MaximumValue(const LogicalType &type) {
 			throw InternalException("Unknown decimal type");
 		}
 	}
-	case LogicalTypeId::ENUM:
-		return Value::ENUM(EnumType::GetSize(type) - 1, type);
+	case LogicalTypeId::ENUM: {
+		auto enum_size = EnumType::GetSize(type);
+		return Value::ENUM(enum_size - (enum_size ? 1 : 0), type);
+	}
 	default:
 		throw InvalidTypeException(type, "MaximumValue requires numeric type");
 	}
@@ -530,10 +548,10 @@ Value Value::DECIMAL(int64_t value, uint8_t width, uint8_t scale) {
 	Value result(decimal_type);
 	switch (decimal_type.InternalType()) {
 	case PhysicalType::INT16:
-		result.value_.smallint = value;
+		result.value_.smallint = NumericCast<int16_t>(value);
 		break;
 	case PhysicalType::INT32:
-		result.value_.integer = value;
+		result.value_.integer = NumericCast<int32_t>(value);
 		break;
 	case PhysicalType::INT64:
 		result.value_.bigint = value;
@@ -664,7 +682,7 @@ Value Value::STRUCT(const LogicalType &type, vector<Value> struct_values) {
 	for (size_t i = 0; i < struct_values.size(); i++) {
 		struct_values[i] = struct_values[i].DefaultCastAs(child_types[i].second);
 	}
-	result.value_info_ = make_shared<NestedValueInfo>(std::move(struct_values));
+	result.value_info_ = make_shared_ptr<NestedValueInfo>(std::move(struct_values));
 	result.type_ = type;
 	result.is_null = false;
 	return result;
@@ -707,7 +725,19 @@ Value Value::MAP(const LogicalType &key_type, const LogicalType &value_type, vec
 		new_children.push_back(std::make_pair("value", std::move(values[i])));
 		values[i] = Value::STRUCT(std::move(new_children));
 	}
-	result.value_info_ = make_shared<NestedValueInfo>(std::move(values));
+	result.value_info_ = make_shared_ptr<NestedValueInfo>(std::move(values));
+	return result;
+}
+
+Value Value::MAP(const unordered_map<string, string> &kv_pairs) {
+	Value result;
+	result.type_ = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
+	result.is_null = false;
+	vector<Value> pairs;
+	for (auto &kv : kv_pairs) {
+		pairs.push_back(Value::STRUCT({{"key", Value(kv.first)}, {"value", Value(kv.second)}}));
+	}
+	result.value_info_ = make_shared_ptr<NestedValueInfo>(std::move(pairs));
 	return result;
 }
 
@@ -731,7 +761,7 @@ Value Value::UNION(child_list_t<LogicalType> members, uint8_t tag, Value value) 
 		}
 	}
 	union_values[tag + 1] = std::move(value);
-	result.value_info_ = make_shared<NestedValueInfo>(std::move(union_values));
+	result.value_info_ = make_shared_ptr<NestedValueInfo>(std::move(union_values));
 	result.type_ = LogicalType::UNION(std::move(members));
 	return result;
 }
@@ -748,7 +778,7 @@ Value Value::LIST(vector<Value> values) {
 #endif
 	Value result;
 	result.type_ = LogicalType::LIST(values[0].type());
-	result.value_info_ = make_shared<NestedValueInfo>(std::move(values));
+	result.value_info_ = make_shared_ptr<NestedValueInfo>(std::move(values));
 	result.is_null = false;
 	return result;
 }
@@ -766,7 +796,7 @@ Value Value::LIST(const LogicalType &child_type, vector<Value> values) {
 Value Value::EMPTYLIST(const LogicalType &child_type) {
 	Value result;
 	result.type_ = LogicalType::LIST(child_type);
-	result.value_info_ = make_shared<NestedValueInfo>();
+	result.value_info_ = make_shared_ptr<NestedValueInfo>();
 	result.is_null = false;
 	return result;
 }
@@ -783,7 +813,7 @@ Value Value::ARRAY(vector<Value> values) {
 #endif
 	Value result;
 	result.type_ = LogicalType::ARRAY(values[0].type(), values.size());
-	result.value_info_ = make_shared<NestedValueInfo>(std::move(values));
+	result.value_info_ = make_shared_ptr<NestedValueInfo>(std::move(values));
 	result.is_null = false;
 	return result;
 }
@@ -801,7 +831,7 @@ Value Value::ARRAY(const LogicalType &child_type, vector<Value> values) {
 Value Value::EMPTYARRAY(const LogicalType &child_type, uint32_t size) {
 	Value result;
 	result.type_ = LogicalType::ARRAY(child_type, size);
-	result.value_info_ = make_shared<NestedValueInfo>();
+	result.value_info_ = make_shared_ptr<NestedValueInfo>();
 	result.is_null = false;
 	return result;
 }
@@ -809,28 +839,35 @@ Value Value::EMPTYARRAY(const LogicalType &child_type, uint32_t size) {
 Value Value::BLOB(const_data_ptr_t data, idx_t len) {
 	Value result(LogicalType::BLOB);
 	result.is_null = false;
-	result.value_info_ = make_shared<StringValueInfo>(string(const_char_ptr_cast(data), len));
+	result.value_info_ = make_shared_ptr<StringValueInfo>(string(const_char_ptr_cast(data), len));
 	return result;
 }
 
 Value Value::BLOB(const string &data) {
 	Value result(LogicalType::BLOB);
 	result.is_null = false;
-	result.value_info_ = make_shared<StringValueInfo>(Blob::ToBlob(string_t(data)));
+	result.value_info_ = make_shared_ptr<StringValueInfo>(Blob::ToBlob(string_t(data)));
+	return result;
+}
+
+Value Value::AGGREGATE_STATE(const LogicalType &type, const_data_ptr_t data, idx_t len) { // NOLINT
+	Value result(type);
+	result.is_null = false;
+	result.value_info_ = make_shared_ptr<StringValueInfo>(string(const_char_ptr_cast(data), len));
 	return result;
 }
 
 Value Value::BIT(const_data_ptr_t data, idx_t len) {
 	Value result(LogicalType::BIT);
 	result.is_null = false;
-	result.value_info_ = make_shared<StringValueInfo>(string(const_char_ptr_cast(data), len));
+	result.value_info_ = make_shared_ptr<StringValueInfo>(string(const_char_ptr_cast(data), len));
 	return result;
 }
 
 Value Value::BIT(const string &data) {
 	Value result(LogicalType::BIT);
 	result.is_null = false;
-	result.value_info_ = make_shared<StringValueInfo>(Bit::ToBit(string_t(data)));
+	result.value_info_ = make_shared_ptr<StringValueInfo>(Bit::ToBit(string_t(data)));
 	return result;
 }
 
@@ -839,13 +876,13 @@ Value Value::ENUM(uint64_t value, const LogicalType &original_type) {
 	Value result(original_type);
 	switch (original_type.InternalType()) {
 	case PhysicalType::UINT8:
-		result.value_.utinyint = value;
+		result.value_.utinyint = NumericCast<uint8_t>(value);
 		break;
 	case PhysicalType::UINT16:
-		result.value_.usmallint = value;
+		result.value_.usmallint = NumericCast<uint16_t>(value);
 		break;
 	case PhysicalType::UINT32:
-		result.value_.uinteger = value;
+		result.value_.uinteger = NumericCast<uint32_t>(value);
 		break;
 	default:
 		throw InternalException("Incorrect Physical Type for ENUM");
@@ -1198,11 +1235,11 @@ Value Value::Numeric(const LogicalType &type, int64_t value) {
 		return Value::UINTEGER((uint32_t)value);
 	case LogicalTypeId::UBIGINT:
 		D_ASSERT(value >= 0);
-		return Value::UBIGINT(value);
+		return Value::UBIGINT(NumericCast<uint64_t>(value));
 	case LogicalTypeId::HUGEINT:
 		return Value::HUGEINT(value);
 	case LogicalTypeId::UHUGEINT:
-		return Value::UHUGEINT(value);
+		return Value::UHUGEINT(NumericCast<uint64_t>(value));
 	case LogicalTypeId::DECIMAL:
 		return Value::DECIMAL(value, DecimalType::GetWidth(type), DecimalType::GetScale(type));
 	case LogicalTypeId::FLOAT:
@@ -1210,10 +1247,10 @@ Value Value::Numeric(const LogicalType &type, int64_t value) {
 	case LogicalTypeId::DOUBLE:
 		return Value((double)value);
 	case LogicalTypeId::POINTER:
-		return Value::POINTER(value);
+		return Value::POINTER(NumericCast<uintptr_t>(value));
 	case LogicalTypeId::DATE:
 		D_ASSERT(value >= NumericLimits<int32_t>::Minimum() && value <= NumericLimits<int32_t>::Maximum());
-		return Value::DATE(date_t(value));
+		return Value::DATE(date_t(NumericCast<int32_t>(value)));
 	case LogicalTypeId::TIME:
 		return Value::TIME(dtime_t(value));
 	case LogicalTypeId::TIMESTAMP:
@@ -1651,7 +1688,7 @@ hugeint_t IntegralValue::Get(const Value &value) {
 	case PhysicalType::UINT32:
 		return UIntegerValue::Get(value);
 	case PhysicalType::UINT64:
-		return UBigIntValue::Get(value);
+		return NumericCast<int64_t>(UBigIntValue::Get(value));
 	case PhysicalType::UINT128:
 		return static_cast<hugeint_t>(UhugeIntValue::Get(value));
 	default:
@@ -1925,27 +1962,27 @@ Value Value::Deserialize(Deserializer &deserializer) {
 	case PhysicalType::VARCHAR: {
 		auto str = deserializer.ReadProperty<string>(102, "value");
 		if (type.id() == LogicalTypeId::BLOB) {
-			new_value.value_info_ = make_shared<StringValueInfo>(Blob::ToBlob(str));
+			new_value.value_info_ = make_shared_ptr<StringValueInfo>(Blob::ToBlob(str));
 		} else {
-			new_value.value_info_ = make_shared<StringValueInfo>(str);
+			new_value.value_info_ = make_shared_ptr<StringValueInfo>(str);
 		}
 	} break;
 	case PhysicalType::LIST: {
 		deserializer.ReadObject(102, "value", [&](Deserializer &obj) {
 			auto children = obj.ReadProperty<vector<Value>>(100, "children");
-			new_value.value_info_ = make_shared<NestedValueInfo>(children);
+			new_value.value_info_ = make_shared_ptr<NestedValueInfo>(children);
 		});
 	} break;
 	case PhysicalType::STRUCT: {
 		deserializer.ReadObject(102, "value", [&](Deserializer &obj) {
 			auto children = obj.ReadProperty<vector<Value>>(100, "children");
-			new_value.value_info_ = make_shared<NestedValueInfo>(children);
+			new_value.value_info_ = make_shared_ptr<NestedValueInfo>(children);
 		});
 	} break;
 	case PhysicalType::ARRAY: {
 		deserializer.ReadObject(102, "value", [&](Deserializer &obj) {
 			auto children = obj.ReadProperty<vector<Value>>(100, "children");
-			new_value.value_info_ = make_shared<NestedValueInfo>(children);
+			new_value.value_info_ = make_shared_ptr<NestedValueInfo>(children);
 		});
 	} break;
 	default:

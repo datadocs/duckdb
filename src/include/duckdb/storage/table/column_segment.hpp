@@ -17,6 +17,7 @@
 #include "duckdb/function/compression_function.hpp"
 #include "duckdb/storage/table/segment_base.hpp"
 #include "duckdb/storage/buffer/block_handle.hpp"
+#include "duckdb/common/enums/scan_vector_type.hpp"
 
 namespace duckdb {
 class ColumnSegment;
@@ -64,12 +65,12 @@ public:
 public:
 	void InitializeScan(ColumnScanState &state);
 	//! Scan one vector from this segment
-	void Scan(ColumnScanState &state, idx_t scan_count, Vector &result, idx_t result_offset, bool entire_vector);
+	void Scan(ColumnScanState &state, idx_t scan_count, Vector &result, idx_t result_offset, ScanVectorType scan_type);
 	//! Fetch a value of the specific row id and append it to the result
 	void FetchRow(ColumnFetchState &state, row_t row_id, Vector &result, idx_t result_idx);
 
-	static idx_t FilterSelection(SelectionVector &sel, Vector &result, const TableFilter &filter,
-	                             idx_t &approved_tuple_count, ValidityMask &mask);
+	static idx_t FilterSelection(SelectionVector &sel, Vector &vector, UnifiedVectorFormat &vdata,
+	                             const TableFilter &filter, idx_t scan_count, idx_t &approved_tuple_count);
 
 	//! Skip a scan forward to the row_index specified in the scan state
 	void Skip(ColumnScanState &state);
