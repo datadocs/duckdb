@@ -1,17 +1,18 @@
 #ifndef INFERRER_H
 #define INFERRER_H
 
+#include "duckdb.hpp"
+#include "yyjson.hpp"
+
 #include <stddef.h>
 #include <stdint.h>
-#include <vector>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <variant>
+#include <vector>
 
-#include "duckdb.hpp"
-
-struct yyjson_val;
+using namespace duckdb_yyjson; // NOLINT
 
 namespace duckdb {
 

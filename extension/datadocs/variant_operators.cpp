@@ -1129,8 +1129,8 @@ unique_ptr<Expression> CreateBoundOperatorFuncExpression(ClientContext &context,
 
 	ErrorData error;
 	FunctionBinder function_binder(context);
-	const idx_t best_function = function_binder.BindFunction(func.name, func.functions, types, error);
-	if (best_function == DConstants::INVALID_INDEX) {
+	auto best_function = function_binder.BindFunction(func.name, func.functions, types, error);
+	if (!best_function.IsValid()) {
 		string call_str = Function::CallToString(function_name, types);
 		string candidate_str = "";
 		for (auto &f : func.functions.functions) {
@@ -1143,7 +1143,7 @@ unique_ptr<Expression> CreateBoundOperatorFuncExpression(ClientContext &context,
 		throw BinderException(str_error);
 		return nullptr;
 	}
-	auto bound_function = func.functions.GetFunctionByOffset(best_function);
+	auto bound_function = func.functions.GetFunctionByOffset(best_function.GetIndex());
 	unique_ptr<Expression> result = function_binder.BindScalarFunction(bound_function, std::move(func_arguments), true);
 	return result;
 }
