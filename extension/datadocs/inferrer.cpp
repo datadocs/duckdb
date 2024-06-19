@@ -34,6 +34,7 @@
 #include "json_reader.h"
 #include "xml_reader.h"
 #include "utility.h"
+#include "converters.hpp"
 #include "type_conv.h"
 #include "wkt.h"
 
@@ -284,6 +285,11 @@ IngestColBase* BuildColumn(const IngestColumnDefinition &col, idx_t &cur_row) {
 	case ColumnType::Date: return new IngestColDATE(col.name, cur_row, col.format);
 	case ColumnType::Time: return new IngestColTIME(col.name, cur_row, col.format);
 	case ColumnType::Datetime: return new IngestColTIMESTAMP(col.name, cur_row, col.format);
+	case ColumnType::Interval:
+		if (col.format == "ISO") {
+			return new IngestColINTERVALISO(col.name, cur_row);
+		}
+		return new IngestColINTERVAL(col.name, cur_row);
 	case ColumnType::Bytes:
 		if (col.format == "base64") {
 			return new IngestColBLOBBase64(col.name, cur_row);
@@ -922,6 +928,52 @@ public:
 	std::vector<std::string> m_formats;
 };
 
+template<>
+int TType<ColumnType::Interval>::infer(const CellRaw& cell)
+{
+	if (!m_valid)
+		return 0;
+	return m_valid = std::visit(overloaded{
+		[](const std::string& input_string) -> bool
+		{
+			interval_t i;
+			return Interval::FromString(input_string, i);
+		},
+		[](const CellRawDate& v) -> bool
+		{
+			return true;
+		},
+		[](auto v) -> bool { return false; },
+	}, cell);
+}
+
+class TIntervalISO
+{
+public:
+	int infer(const CellRaw& cell)
+	{
+		if (!m_valid)
+			return 0;
+		const std::string* sp = std::get_if<std::string>(&cell);
+		interval_t i;
+		if (!sp || !IntervalFromISOString(sp->data(), sp->size(), i))
+			return m_valid = false;
+		return 1;
+	}
+
+	bool create_schema(IngestColumnDefinition& col) const
+	{
+		if (m_valid)
+		{
+			col.column_type = ColumnType::Interval;
+			col.format = "ISO";
+		}
+		return m_valid;
+	}
+
+	bool m_valid = true;
+};
+
 class TBytes
 {
 public:
@@ -1082,7 +1134,9 @@ public:
 		TDecimal,
 		TBytes,
 		TBytesBase64,
-		TDateTime
+		TDateTime,
+		TType<ColumnType::Interval>,
+		TIntervalISO
 	> m_types;
 };
 
@@ -1299,7 +1353,9 @@ private:
 		TDecimal,
 		TBytes,
 		TBytesBase64,
-		TDateTime
+		TDateTime,
+		TType<ColumnType::Interval>,
+		TIntervalISO
 	> m_types;
 	bool m_has_single_value = false;
 	bool m_is_list = false;
@@ -1495,6 +1551,8 @@ public:
 		TBytes,
 		TBytesBase64,
 		TDateTime,
+		TType<ColumnType::Interval>,
+		TIntervalISO,
 		TWKT
 	> m_types;
 	enum ValueTypes { ValueString = 1, ValueNumber = 2, ValueBool = 4, ValueSingle = 8, ValueObject = 16, ValueArray = 32 };
@@ -1644,6 +1702,8 @@ private:
 		TBytes,
 		TBytesBase64,
 		TDateTime,
+		TType<ColumnType::Interval>,
+		TIntervalISO,
 		TXML,
 		TJSON,
 		TWKT,
