@@ -182,6 +182,7 @@ static const std::vector<std::string> type_index {
 	"DATE",
 	"TIME",
 	"TIMESTAMP",
+	"INTERVAL",
 	"BLOB",
 	"NUMERIC",
 	"GEOGRAPHY",

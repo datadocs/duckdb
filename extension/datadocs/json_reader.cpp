@@ -586,6 +586,11 @@ JSONValue *JSONBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row, in
 	case ColumnType::Date: return new JSONCol<IngestColDATE>(col.name, cur_row, col.format);
 	case ColumnType::Time: return new JSONCol<IngestColTIME>(col.name, cur_row, col.format);
 	case ColumnType::Datetime: return new JSONCol<IngestColTIMESTAMP>(col.name, cur_row, col.format);
+	case ColumnType::Interval:
+		if (col.format == "ISO") {
+			return new JSONCol<IngestColINTERVALISO>(col.name, cur_row);
+		}
+		return new JSONCol<IngestColINTERVAL>(col.name, cur_row);
 	case ColumnType::Bytes:
 		if (col.format == "base64") {
 			return new JSONCol<IngestColBLOBBase64>(col.name, cur_row);

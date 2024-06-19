@@ -9,6 +9,7 @@
 #include "column.hpp"
 #include "utility.h"
 #include "type_conv.h"
+#include "converters.hpp"
 #include "vector_proxy.hpp"
 #include "wkt.h"
 
@@ -183,6 +184,30 @@ bool IngestColTIMESTAMP::Write(string_t v) {
 
 bool IngestColTIMESTAMP::WriteExcelDate(double v) {
 	Writer().Set(int64_t((v - 25569) * Interval::MICROS_PER_DAY));
+	return true;
+}
+
+bool IngestColINTERVAL::Write(string_t v) {
+	string error_message;
+	interval_t result;
+	if (!Interval::FromCString(v.GetData(), v.GetSize(), result, &error_message, false)) {
+		return false;
+	}
+	Writer().Set(result);
+	return true;
+}
+
+bool IngestColINTERVAL::WriteExcelDate(double v) {
+	Writer().Set(interval_t {0, 0, int64_t(v * Interval::MICROS_PER_DAY)});
+	return true;
+}
+
+bool IngestColINTERVALISO::Write(string_t v) {
+	interval_t result;
+	if (!IntervalFromISOString(v.GetData(), v.GetSize(), result)) {
+		return false;
+	}
+	Writer().Set(result);
 	return true;
 }
 
