@@ -964,27 +964,28 @@ public:
 	bool ReadScalar(VectorWriter &result, yyjson_val *val) override {
 		hugeint_t res;
 		string message(1, ' ');
+		CastParameters parameters(false, &message);
 		switch (unsafe_yyjson_get_tag(val)) {
 		case YYJSON_TYPE_NUM | YYJSON_SUBTYPE_REAL:
-			if (!TryCastToDecimal::Operation(unsafe_yyjson_get_real(val), res, &message, dd_numeric_width,
+			if (!TryCastToDecimal::Operation(unsafe_yyjson_get_real(val), res, parameters, dd_numeric_width,
 			                                 dd_numeric_scale)) {
 				return false;
 			}
 			break;
 		case YYJSON_TYPE_NUM | YYJSON_SUBTYPE_UINT:
-			if (!TryCastToDecimal::Operation(unsafe_yyjson_get_uint(val), res, &message, dd_numeric_width,
+			if (!TryCastToDecimal::Operation(unsafe_yyjson_get_uint(val), res, parameters, dd_numeric_width,
 			                                 dd_numeric_scale)) {
 				return false;
 			}
 			break;
 		case YYJSON_TYPE_NUM | YYJSON_SUBTYPE_SINT:
-			if (!TryCastToDecimal::Operation(unsafe_yyjson_get_sint(val), res, &message, dd_numeric_width,
+			if (!TryCastToDecimal::Operation(unsafe_yyjson_get_sint(val), res, parameters, dd_numeric_width,
 			                                 dd_numeric_scale)) {
 				return false;
 			}
 			break;
 		case YYJSON_TYPE_STR | YYJSON_SUBTYPE_NONE:
-			if (!TryCastToDecimal::Operation(string_t(unsafe_yyjson_get_str(val)), res, &message, dd_numeric_width,
+			if (!TryCastToDecimal::Operation(string_t(unsafe_yyjson_get_str(val)), res, parameters, dd_numeric_width,
 			                                 dd_numeric_scale)) {
 				return false;
 			}
@@ -2978,8 +2979,9 @@ static bool VariantFromSortHashNumber(VectorWriter &writer, bool negative, int e
 	}
 	hugeint_t v;
 	string error;
+	CastParameters parameters(false, &error);
 	try {
-		if (!TryCastToDecimal::Operation(string_t(s), v, &error, dd_numeric_width, dd_numeric_scale)) {
+		if (!TryCastToDecimal::Operation(string_t(s), v, parameters, dd_numeric_width, dd_numeric_scale)) {
 			return false;
 		}
 	} catch (OutOfRangeException) {

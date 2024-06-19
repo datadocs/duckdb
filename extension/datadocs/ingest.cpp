@@ -60,7 +60,7 @@ static unique_ptr<FunctionData> IngestBind(ClientContext &context, TableFunction
 			selected_file = true;
 		}
 
-		if(!select_file_ok){
+		if (!select_file_ok) {
 			std::string err_msg = "Cannot select the path: ";
 			char *encoded_path = yyjson_val_write(val, 0, NULL);
 			if (encoded_path) {
@@ -103,8 +103,9 @@ static void IngestImpl(ClientContext &context, TableFunctionInput &data_p, DataC
 	output.SetCardinality(n_rows);
 }
 
-unique_ptr<TableRef> ReadIngestReplacement(ClientContext &context, const string &table_name,
-                                           ReplacementScanData *data) {
+unique_ptr<TableRef> ReadIngestReplacement(ClientContext &context, ReplacementScanInput &input,
+                                           optional_ptr<ReplacementScanData> data) {
+	auto &table_name = input.table_name;
 	auto lower_name = StringUtil::Lower(table_name);
 	// remove any compression
 	if (StringUtil::EndsWith(lower_name, ".gz")) {
