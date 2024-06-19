@@ -157,6 +157,27 @@ public:
 	bool WriteExcelDate(double v) override;
 };
 
+class IngestColINTERVAL : public IngestColBase {
+public:
+	using IngestColBase::IngestColBase, IngestColBase::Write;
+
+	LogicalType GetType() const override {
+		return LogicalType::INTERVAL;
+	};
+	bool Write(string_t v) override;
+	bool WriteExcelDate(double v) override;
+};
+
+class IngestColINTERVALISO : public IngestColBase {
+public:
+	using IngestColBase::IngestColBase, IngestColBase::Write;
+
+	LogicalType GetType() const override {
+		return LogicalType::INTERVAL;
+	};
+	bool Write(string_t v) override;
+};
+
 class IngestColBLOBBase64 : public IngestColBase {
 public:
 	using IngestColBase::IngestColBase, IngestColBase::Write;
