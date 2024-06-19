@@ -15,7 +15,9 @@ VectorHolder::VectorHolder(Vector &vec, idx_t count) {
 	}
 }
 
-VectorHolder::VectorHolder(void *ptr) noexcept : data {ConstantVector::ZeroSelectionVector(), (data_ptr_t)ptr} {
+VectorHolder::VectorHolder(void *ptr) noexcept {
+	data.sel = ConstantVector::ZeroSelectionVector();
+	data.data = (data_ptr_t)ptr;
 }
 
 VectorReader VectorHolder::operator[](idx_t index) const noexcept {
