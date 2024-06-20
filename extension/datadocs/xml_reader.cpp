@@ -367,6 +367,11 @@ XMLValueBase *XMLBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row) 
 	case ColumnType::Date: return new XMLCol<IngestColDATE>(col.name, cur_row, col.format);
 	case ColumnType::Time: return new XMLCol<IngestColTIME>(col.name, cur_row, col.format);
 	case ColumnType::Datetime: return new XMLCol<IngestColTIMESTAMP>(col.name, cur_row, col.format);
+	case ColumnType::Interval:
+		if (col.format == "ISO") {
+			return new XMLCol<IngestColINTERVALISO>(col.name, cur_row);
+		}
+		return new XMLCol<IngestColINTERVAL>(col.name, cur_row);
 	case ColumnType::Bytes:
 		if (col.format == "base64") {
 			return new XMLCol<IngestColBLOBBase64>(col.name, cur_row);

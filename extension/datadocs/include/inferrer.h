@@ -24,6 +24,7 @@ enum class ColumnType : uint8_t {
 	Date,
 	Time,
 	Datetime,
+	Interval,
 	Bytes,
 	Numeric,
 	Geography,
