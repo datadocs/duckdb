@@ -1,4 +1,5 @@
 #include "duckdb/function/cast_rules.hpp"
+#include "duckdb/common/numeric_utils.hpp"
 
 namespace duckdb {
 
@@ -23,6 +24,8 @@ static int64_t TargetTypeCost(const LogicalType &type) {
 		return 121;
 	case LogicalTypeId::TIMESTAMP_SEC:
 		return 122;
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return 123;
 	case LogicalTypeId::VARCHAR:
 		return 149;
 	case LogicalTypeId::STRUCT:
@@ -208,6 +211,10 @@ static int64_t ImplicitCastUhugeint(const LogicalType &to) {
 static int64_t ImplicitCastDate(const LogicalType &to) {
 	switch (to.id()) {
 	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_SEC:
 		return TargetTypeCost(to);
 	default:
 		return -1;
@@ -257,6 +264,8 @@ static int64_t ImplicitCastTimestampNS(const LogicalType &to) {
 static int64_t ImplicitCastTimestamp(const LogicalType &to) {
 	switch (to.id()) {
 	case LogicalTypeId::TIMESTAMP_NS:
+		return TargetTypeCost(to);
+	case LogicalTypeId::TIMESTAMP_TZ:
 		return TargetTypeCost(to);
 	default:
 		return -1;
@@ -381,8 +390,12 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 	}
 	if (from.id() == LogicalTypeId::ARRAY && to.id() == LogicalTypeId::LIST) {
 		// Arrays can be cast to lists for the cost of casting the child type
+		auto child_cost = ImplicitCast(ArrayType::GetChildType(from), ListType::GetChildType(to));
+		if (child_cost < 0) {
+			return -1;
+		}
 		// add 1 because we prefer ARRAY->ARRAY casts over ARRAY->LIST casts
-		return ImplicitCast(ArrayType::GetChildType(from), ListType::GetChildType(to)) + 1;
+		return child_cost + 1;
 	}
 	if (from.id() == LogicalTypeId::LIST && (to.id() == LogicalTypeId::ARRAY && !ArrayType::IsAnySize(to))) {
 		// Lists can be cast to arrays for the cost of casting the child type, if the target size is known
@@ -410,7 +423,7 @@ int64_t CastRules::ImplicitCast(const LogicalType &from, const LogicalType &to) 
 					auto &from_member_type = UnionType::GetMemberType(from, from_member_idx);
 					auto &to_member_type = UnionType::GetMemberType(to, to_member_idx);
 
-					int child_cost = ImplicitCast(from_member_type, to_member_type);
+					int child_cost = NumericCast<int>(ImplicitCast(from_member_type, to_member_type));
 					if (child_cost > cost) {
 						cost = child_cost;
 					}

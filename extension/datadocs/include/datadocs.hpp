@@ -2,9 +2,9 @@
 
 #include "duckdb.hpp"
 #include "vector_proxy.hpp"
+#include "yyjson.hpp"
 
-struct yyjson_val;
-struct yyjson_alc;
+using namespace duckdb_yyjson; // NOLINT
 
 namespace duckdb {
 

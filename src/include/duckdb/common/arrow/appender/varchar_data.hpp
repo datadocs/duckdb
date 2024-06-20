@@ -77,21 +77,22 @@ struct ArrowVarcharData {
 			auto string_length = OP::GetLength(data[source_idx]);
 
 			// append the offset data
-			auto current_offset = last_offset + string_length;
-			if (!LARGE_STRING && (int64_t)last_offset + string_length > NumericLimits<int32_t>::Maximum()) {
+			auto current_offset = UnsafeNumericCast<idx_t>(last_offset) + string_length;
+			if (!LARGE_STRING &&
+			    UnsafeNumericCast<idx_t>(last_offset) + string_length > NumericLimits<int32_t>::Maximum()) {
 				D_ASSERT(append_data.options.arrow_offset_size == ArrowOffsetSize::REGULAR);
 				throw InvalidInputException(
 				    "Arrow Appender: The maximum total string size for regular string buffers is "
 				    "%u but the offset of %lu exceeds this.",
 				    NumericLimits<int32_t>::Maximum(), current_offset);
 			}
-			offset_data[offset_idx] = current_offset;
+			offset_data[offset_idx] = UnsafeNumericCast<BUFTYPE>(current_offset);
 
 			// resize the string buffer if required, and write the string data
 			append_data.aux_buffer.resize(current_offset);
 			OP::WriteData(append_data.aux_buffer.data() + last_offset, data[source_idx]);
 
-			last_offset = current_offset;
+			last_offset = UnsafeNumericCast<BUFTYPE>(current_offset);
 		}
 		append_data.row_count += size;
 	}

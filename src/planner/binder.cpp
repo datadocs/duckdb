@@ -16,55 +16,128 @@
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_sample.hpp"
 #include "duckdb/parser/query_node/list.hpp"
+#include "duckdb/common/helper.hpp"
+#include "duckdb/common/enum_util.hpp"
 
 #include <algorithm>
 
 namespace duckdb {
 
-Binder *Binder::GetRootBinder() {
-	Binder *root = this;
-	while (root->parent) {
-		root = root->parent.get();
+Binder &Binder::GetRootBinder() {
+	reference<Binder> root = *this;
+	while (root.get().parent) {
+		root = *root.get().parent;
 	}
-	return root;
+	return root.get();
 }
 
 idx_t Binder::GetBinderDepth() const {
-	const Binder *root = this;
+	const_reference<Binder> root = *this;
 	idx_t depth = 1;
-	while (root->parent) {
+	while (root.get().parent) {
 		depth++;
-		root = root->parent.get();
+		root = *root.get().parent;
 	}
 	return depth;
 }
 
-shared_ptr<Binder> Binder::CreateBinder(ClientContext &context, optional_ptr<Binder> parent, bool inherit_ctes) {
+shared_ptr<Binder> Binder::CreateBinder(ClientContext &context, optional_ptr<Binder> parent, BinderType binder_type) {
 	auto depth = parent ? parent->GetBinderDepth() : 0;
 	if (depth > context.config.max_expression_depth) {
 		throw BinderException("Max expression depth limit of %lld exceeded. Use \"SET max_expression_depth TO x\" to "
 		                      "increase the maximum expression depth.",
 		                      context.config.max_expression_depth);
 	}
-	return make_shared<Binder>(true, context, parent ? parent->shared_from_this() : nullptr, inherit_ctes);
+	return make_shared_ptr<Binder>(true, context, parent ? parent->shared_from_this() : nullptr, binder_type);
 }
 
-Binder::Binder(bool, ClientContext &context, shared_ptr<Binder> parent_p, bool inherit_ctes_p)
-    : context(context), bind_context(*this), parent(std::move(parent_p)), bound_tables(0),
-      inherit_ctes(inherit_ctes_p) {
+Binder::Binder(bool, ClientContext &context, shared_ptr<Binder> parent_p, BinderType binder_type)
+    : context(context), bind_context(*this), parent(std::move(parent_p)), bound_tables(0), binder_type(binder_type),
+      entry_retriever(context) {
 	if (parent) {
+		entry_retriever.SetCallback(parent->entry_retriever.GetCallback());
 
 		// We have to inherit macro and lambda parameter bindings and from the parent binder, if there is a parent.
 		macro_binding = parent->macro_binding;
 		lambda_bindings = parent->lambda_bindings;
 
-		if (inherit_ctes) {
+		if (binder_type == BinderType::REGULAR_BINDER) {
 			// We have to inherit CTE bindings from the parent bind_context, if there is a parent.
 			bind_context.SetCTEBindings(parent->bind_context.GetCTEBindings());
 			bind_context.cte_references = parent->bind_context.cte_references;
 			parameters = parent->parameters;
 		}
 	}
+}
+
+unique_ptr<BoundCTENode> Binder::BindMaterializedCTE(CommonTableExpressionMap &cte_map) {
+	// Extract materialized CTEs from cte_map
+	vector<unique_ptr<CTENode>> materialized_ctes;
+	for (auto &cte : cte_map.map) {
+		auto &cte_entry = cte.second;
+		if (cte_entry->materialized == CTEMaterialize::CTE_MATERIALIZE_ALWAYS) {
+			auto mat_cte = make_uniq<CTENode>();
+			mat_cte->ctename = cte.first;
+			mat_cte->query = cte_entry->query->node->Copy();
+			mat_cte->aliases = cte_entry->aliases;
+			materialized_ctes.push_back(std::move(mat_cte));
+		}
+	}
+
+	if (materialized_ctes.empty()) {
+		return nullptr;
+	}
+
+	unique_ptr<CTENode> cte_root = nullptr;
+	while (!materialized_ctes.empty()) {
+		unique_ptr<CTENode> node_result;
+		node_result = std::move(materialized_ctes.back());
+		node_result->cte_map = cte_map.Copy();
+		if (cte_root) {
+			node_result->child = std::move(cte_root);
+		} else {
+			node_result->child = nullptr;
+		}
+		cte_root = std::move(node_result);
+		materialized_ctes.pop_back();
+	}
+
+	AddCTEMap(cte_map);
+	auto bound_cte = BindCTE(cte_root->Cast<CTENode>());
+
+	return bound_cte;
+}
+
+template <class T>
+BoundStatement Binder::BindWithCTE(T &statement) {
+	BoundStatement bound_statement;
+	auto bound_cte = BindMaterializedCTE(statement.template Cast<T>().cte_map);
+	if (bound_cte) {
+		reference<BoundCTENode> tail_ref = *bound_cte;
+
+		while (tail_ref.get().child && tail_ref.get().child->type == QueryNodeType::CTE_NODE) {
+			tail_ref = tail_ref.get().child->Cast<BoundCTENode>();
+		}
+
+		auto &tail = tail_ref.get();
+		bound_statement = tail.child_binder->Bind(statement.template Cast<T>());
+
+		tail.types = bound_statement.types;
+		tail.names = bound_statement.names;
+
+		for (auto &c : tail.query_binder->correlated_columns) {
+			tail.child_binder->AddCorrelatedColumn(c);
+		}
+		MoveCorrelatedExpressions(*tail.child_binder);
+
+		// extract operator below root operation
+		auto plan = std::move(bound_statement.plan->children[0]);
+		bound_statement.plan->children.clear();
+		bound_statement.plan->children.push_back(CreatePlan(*bound_cte, std::move(plan)));
+	} else {
+		bound_statement = Bind(statement.template Cast<T>());
+	}
+	return bound_statement;
 }
 
 BoundStatement Binder::Bind(SQLStatement &statement) {
@@ -77,9 +150,9 @@ BoundStatement Binder::Bind(SQLStatement &statement) {
 	case StatementType::COPY_STATEMENT:
 		return Bind(statement.Cast<CopyStatement>());
 	case StatementType::DELETE_STATEMENT:
-		return Bind(statement.Cast<DeleteStatement>());
+		return BindWithCTE(statement.Cast<DeleteStatement>());
 	case StatementType::UPDATE_STATEMENT:
-		return Bind(statement.Cast<UpdateStatement>());
+		return BindWithCTE(statement.Cast<UpdateStatement>());
 	case StatementType::RELATION_STATEMENT:
 		return Bind(statement.Cast<RelationStatement>());
 	case StatementType::CREATE_STATEMENT:
@@ -118,6 +191,8 @@ BoundStatement Binder::Bind(SQLStatement &statement) {
 		return Bind(statement.Cast<DetachStatement>());
 	case StatementType::COPY_DATABASE_STATEMENT:
 		return Bind(statement.Cast<CopyDatabaseStatement>());
+	case StatementType::UPDATE_EXTENSIONS_STATEMENT:
+		return Bind(statement.Cast<UpdateExtensionsStatement>());
 	default: // LCOV_EXCL_START
 		throw NotImplementedException("Unimplemented statement type \"%s\" for Bind",
 		                              StatementTypeToString(statement.type));
@@ -201,6 +276,9 @@ unique_ptr<BoundTableRef> Binder::Bind(TableRef &ref) {
 	case TableReferenceType::EXPRESSION_LIST:
 		result = Bind(ref.Cast<ExpressionListRef>());
 		break;
+	case TableReferenceType::COLUMN_DATA:
+		result = Bind(ref.Cast<ColumnDataRef>());
+		break;
 	case TableReferenceType::PIVOT:
 		result = Bind(ref.Cast<PivotRef>());
 		break;
@@ -210,7 +288,7 @@ unique_ptr<BoundTableRef> Binder::Bind(TableRef &ref) {
 	case TableReferenceType::CTE:
 	case TableReferenceType::INVALID:
 	default:
-		throw InternalException("Unknown table ref type");
+		throw InternalException("Unknown table ref type (%s)", EnumUtil::ToString(ref.type));
 	}
 	result->sample = std::move(ref.sample);
 	return result;
@@ -237,6 +315,9 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundTableRef &ref) {
 	case TableReferenceType::EXPRESSION_LIST:
 		root = CreatePlan(ref.Cast<BoundExpressionListRef>());
 		break;
+	case TableReferenceType::COLUMN_DATA:
+		root = CreatePlan(ref.Cast<BoundColumnDataRef>());
+		break;
 	case TableReferenceType::CTE:
 		root = CreatePlan(ref.Cast<BoundCTERef>());
 		break;
@@ -245,7 +326,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundTableRef &ref) {
 		break;
 	case TableReferenceType::INVALID:
 	default:
-		throw InternalException("Unsupported bound table ref type");
+		throw InternalException("Unsupported bound table ref type (%s)", EnumUtil::ToString(ref.type));
 	}
 	// plan the sample clause
 	if (ref.sample) {
@@ -263,24 +344,26 @@ void Binder::AddCTE(const string &name, CommonTableExpressionInfo &info) {
 	CTE_bindings.insert(make_pair(name, reference<CommonTableExpressionInfo>(info)));
 }
 
-optional_ptr<CommonTableExpressionInfo> Binder::FindCTE(const string &name, bool skip) {
+vector<reference<CommonTableExpressionInfo>> Binder::FindCTE(const string &name, bool skip) {
 	auto entry = CTE_bindings.find(name);
+	vector<reference<CommonTableExpressionInfo>> ctes;
 	if (entry != CTE_bindings.end()) {
 		if (!skip || entry->second.get().query->node->type == QueryNodeType::RECURSIVE_CTE_NODE) {
-			return &entry->second.get();
+			ctes.push_back(entry->second);
 		}
 	}
-	if (parent && inherit_ctes) {
-		return parent->FindCTE(name, name == alias);
+	if (parent && binder_type == BinderType::REGULAR_BINDER) {
+		auto parent_ctes = parent->FindCTE(name, name == alias);
+		ctes.insert(ctes.end(), parent_ctes.begin(), parent_ctes.end());
 	}
-	return nullptr;
+	return ctes;
 }
 
 bool Binder::CTEIsAlreadyBound(CommonTableExpressionInfo &cte) {
 	if (bound_ctes.find(cte) != bound_ctes.end()) {
 		return true;
 	}
-	if (parent && inherit_ctes) {
+	if (parent && binder_type == BinderType::REGULAR_BINDER) {
 		return parent->CTEIsAlreadyBound(cte);
 	}
 	return false;
@@ -299,8 +382,13 @@ void Binder::AddBoundView(ViewCatalogEntry &view) {
 }
 
 idx_t Binder::GenerateTableIndex() {
-	auto root_binder = GetRootBinder();
-	return root_binder->bound_tables++;
+	auto &root_binder = GetRootBinder();
+	return root_binder.bound_tables++;
+}
+
+StatementProperties &Binder::GetStatementProperties() {
+	auto &root_binder = GetRootBinder();
+	return root_binder.prop;
 }
 
 void Binder::PushExpressionBinder(ExpressionBinder &binder) {
@@ -326,13 +414,17 @@ bool Binder::HasActiveBinder() {
 }
 
 vector<reference<ExpressionBinder>> &Binder::GetActiveBinders() {
-	auto root_binder = GetRootBinder();
-	return root_binder->active_binders;
+	reference<Binder> root = *this;
+	while (root.get().parent && root.get().binder_type == BinderType::REGULAR_BINDER) {
+		root = *root.get().parent;
+	}
+	auto &root_binder = root.get();
+	return root_binder.active_binders;
 }
 
 void Binder::AddUsingBindingSet(unique_ptr<UsingColumnSet> set) {
-	auto root_binder = GetRootBinder();
-	root_binder->bind_context.AddUsingBindingSet(std::move(set));
+	auto &root_binder = GetRootBinder();
+	root_binder.bind_context.AddUsingBindingSet(std::move(set));
 }
 
 void Binder::MoveCorrelatedExpressions(Binder &other) {
@@ -401,14 +493,13 @@ bool Binder::HasMatchingBinding(const string &catalog_name, const string &schema
 }
 
 void Binder::SetBindingMode(BindingMode mode) {
-	auto root_binder = GetRootBinder();
-	// FIXME: this used to also set the 'mode' for the current binder, was that necessary?
-	root_binder->mode = mode;
+	auto &root_binder = GetRootBinder();
+	root_binder.mode = mode;
 }
 
 BindingMode Binder::GetBindingMode() {
-	auto root_binder = GetRootBinder();
-	return root_binder->mode;
+	auto &root_binder = GetRootBinder();
+	return root_binder.mode;
 }
 
 void Binder::SetCanContainNulls(bool can_contain_nulls_p) {
@@ -416,25 +507,18 @@ void Binder::SetCanContainNulls(bool can_contain_nulls_p) {
 }
 
 void Binder::SetAlwaysRequireRebind() {
-	reference<Binder> current_binder = *this;
-	while (true) {
-		auto &current = current_binder.get();
-		current.properties.always_require_rebind = true;
-		if (!current.parent) {
-			break;
-		}
-		current_binder = *current.parent;
-	}
+	auto &properties = GetStatementProperties();
+	properties.always_require_rebind = true;
 }
 
 void Binder::AddTableName(string table_name) {
-	auto root_binder = GetRootBinder();
-	root_binder->table_names.insert(std::move(table_name));
+	auto &root_binder = GetRootBinder();
+	root_binder.table_names.insert(std::move(table_name));
 }
 
 const unordered_set<string> &Binder::GetTableNames() {
-	auto root_binder = GetRootBinder();
-	return root_binder->table_names;
+	auto &root_binder = GetRootBinder();
+	return root_binder.table_names;
 }
 
 // FIXME: this is extremely naive
@@ -500,9 +584,16 @@ BoundStatement Binder::BindReturning(vector<unique_ptr<ParsedExpression>> return
 	// where the data modification doesn't take place until the streamed result is exhausted. Once a row is
 	// returned, it should be guaranteed that the row has been inserted.
 	// see https://github.com/duckdb/duckdb/issues/8310
+	auto &properties = GetStatementProperties();
 	properties.allow_stream_result = false;
 	properties.return_type = StatementReturnType::QUERY_RESULT;
 	return result;
+}
+
+optional_ptr<CatalogEntry> Binder::GetCatalogEntry(CatalogType type, const string &catalog, const string &schema,
+                                                   const string &name, OnEntryNotFound on_entry_not_found,
+                                                   QueryErrorContext &error_context) {
+	return entry_retriever.GetEntry(type, catalog, schema, name, on_entry_not_found, error_context);
 }
 
 } // namespace duckdb

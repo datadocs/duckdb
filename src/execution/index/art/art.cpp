@@ -39,7 +39,7 @@ ART::ART(const string &name, const IndexConstraintType index_constraint_type, co
          TableIOManager &table_io_manager, const vector<unique_ptr<Expression>> &unbound_expressions,
          AttachedDatabase &db, const shared_ptr<array<unique_ptr<FixedSizeAllocator>, ALLOCATOR_COUNT>> &allocators_ptr,
          const IndexStorageInfo &info)
-    : Index(name, ART::TYPE_NAME, index_constraint_type, column_ids, table_io_manager, unbound_expressions, db),
+    : BoundIndex(name, ART::TYPE_NAME, index_constraint_type, column_ids, table_io_manager, unbound_expressions, db),
       allocators(allocators_ptr), owns_data(false) {
 
 	// initialize all allocators
@@ -54,7 +54,8 @@ ART::ART(const string &name, const IndexConstraintType index_constraint_type, co
 		    make_uniq<FixedSizeAllocator>(sizeof(Node16), block_manager),
 		    make_uniq<FixedSizeAllocator>(sizeof(Node48), block_manager),
 		    make_uniq<FixedSizeAllocator>(sizeof(Node256), block_manager)};
-		allocators = make_shared<array<unique_ptr<FixedSizeAllocator>, ALLOCATOR_COUNT>>(std::move(allocator_array));
+		allocators =
+		    make_shared_ptr<array<unique_ptr<FixedSizeAllocator>, ALLOCATOR_COUNT>>(std::move(allocator_array));
 	}
 
 	// deserialize lazily
@@ -133,13 +134,13 @@ unique_ptr<IndexScanState> ART::TryInitializeScan(const Transaction &transaction
 	// match on a comparison type
 	matcher.expr_type = make_uniq<ComparisonExpressionTypeMatcher>();
 	// match on a constant comparison with the indexed expression
-	matcher.matchers.push_back(make_uniq<ExpressionEqualityMatcher>(const_cast<Expression &>(index_expr)));
+	matcher.matchers.push_back(make_uniq<ExpressionEqualityMatcher>(index_expr));
 	matcher.matchers.push_back(make_uniq<ConstantExpressionMatcher>());
 
 	matcher.policy = SetMatcher::Policy::UNORDERED;
 
 	vector<reference<Expression>> bindings;
-	if (matcher.Match(const_cast<Expression &>(filter_expr), bindings)) {
+	if (matcher.Match(const_cast<Expression &>(filter_expr), bindings)) { // NOLINT: Match does not alter the expr
 		// range or equality comparison with constant value
 		// we can use our index here
 		// bindings[0] = the expression
@@ -391,7 +392,8 @@ bool Construct(ART &art, vector<ARTKey> &keys, row_t *row_ids, Node &node, KeySe
 
 	// increment the depth until we reach a leaf or find a mismatching byte
 	auto prefix_start = key_section.depth;
-	while (start_key.len != key_section.depth && start_key.ByteMatches(end_key, key_section.depth)) {
+	while (start_key.len != key_section.depth &&
+	       start_key.ByteMatches(end_key, UnsafeNumericCast<uint32_t>(key_section.depth))) {
 		key_section.depth++;
 	}
 
@@ -407,7 +409,8 @@ bool Construct(ART &art, vector<ARTKey> &keys, row_t *row_ids, Node &node, KeySe
 		}
 
 		reference<Node> ref_node(node);
-		Prefix::New(art, ref_node, start_key, prefix_start, start_key.len - prefix_start);
+		Prefix::New(art, ref_node, start_key, UnsafeNumericCast<uint32_t>(prefix_start),
+		            UnsafeNumericCast<uint32_t>(start_key.len - prefix_start));
 		if (single_row_id) {
 			Leaf::New(ref_node, row_ids[key_section.start]);
 		} else {
@@ -425,7 +428,8 @@ bool Construct(ART &art, vector<ARTKey> &keys, row_t *row_ids, Node &node, KeySe
 	// set the prefix
 	reference<Node> ref_node(node);
 	auto prefix_length = key_section.depth - prefix_start;
-	Prefix::New(art, ref_node, start_key, prefix_start, prefix_length);
+	Prefix::New(art, ref_node, start_key, UnsafeNumericCast<uint32_t>(prefix_start),
+	            UnsafeNumericCast<uint32_t>(prefix_length));
 
 	// set the node
 	auto node_type = Node::GetARTNodeTypeByCount(child_sections.size());
@@ -566,7 +570,8 @@ bool ART::Insert(Node &node, const ARTKey &key, idx_t depth, const row_t &row_id
 	if (!node.HasMetadata()) {
 		D_ASSERT(depth <= key.len);
 		reference<Node> ref_node(node);
-		Prefix::New(*this, ref_node, key, depth, key.len - depth);
+		Prefix::New(*this, ref_node, key, UnsafeNumericCast<uint32_t>(depth),
+		            UnsafeNumericCast<uint32_t>(key.len - depth));
 		Leaf::New(ref_node, row_id);
 		return true;
 	}
@@ -593,7 +598,8 @@ bool ART::Insert(Node &node, const ARTKey &key, idx_t depth, const row_t &row_id
 		Node leaf_node;
 		reference<Node> ref_node(leaf_node);
 		if (depth + 1 < key.len) {
-			Prefix::New(*this, ref_node, key, depth + 1, key.len - depth - 1);
+			Prefix::New(*this, ref_node, key, UnsafeNumericCast<uint32_t>(depth + 1),
+			            UnsafeNumericCast<uint32_t>(key.len - depth - 1));
 		}
 		Leaf::New(ref_node, row_id);
 		Node::InsertChild(*this, node, key[depth], leaf_node);
@@ -623,7 +629,8 @@ bool ART::Insert(Node &node, const ARTKey &key, idx_t depth, const row_t &row_id
 	Node leaf_node;
 	reference<Node> ref_node(leaf_node);
 	if (depth + 1 < key.len) {
-		Prefix::New(*this, ref_node, key, depth + 1, key.len - depth - 1);
+		Prefix::New(*this, ref_node, key, UnsafeNumericCast<uint32_t>(depth + 1),
+		            UnsafeNumericCast<uint32_t>(key.len - depth - 1));
 	}
 	Leaf::New(ref_node, row_id);
 	Node4::InsertChild(*this, next_node, key[depth], leaf_node);
@@ -1108,7 +1115,7 @@ void ART::WritePartialBlocks() {
 
 	// use the partial block manager to serialize all allocator data
 	auto &block_manager = table_io_manager.GetIndexBlockManager();
-	PartialBlockManager partial_block_manager(block_manager, CheckpointType::FULL_CHECKPOINT);
+	PartialBlockManager partial_block_manager(block_manager, PartialBlockType::FULL_CHECKPOINT);
 
 	for (auto &allocator : *allocators) {
 		allocator->SerializeBuffers(partial_block_manager);
@@ -1145,8 +1152,7 @@ void ART::Deserialize(const BlockPointer &pointer) {
 //===--------------------------------------------------------------------===//
 
 void ART::InitializeVacuum(ARTFlags &flags) {
-
-	flags.vacuum_flags.reserve(allocators->size());
+	flags.vacuum_flags.reserve(flags.vacuum_flags.size() + allocators->size());
 	for (auto &allocator : *allocators) {
 		flags.vacuum_flags.push_back(allocator->InitializeVacuum());
 	}
@@ -1224,7 +1230,7 @@ void ART::InitializeMerge(ARTFlags &flags) {
 	}
 }
 
-bool ART::MergeIndexes(IndexLock &state, Index &other_index) {
+bool ART::MergeIndexes(IndexLock &state, BoundIndex &other_index) {
 
 	auto &other_art = other_index.Cast<ART>();
 	if (!other_art.tree.HasMetadata()) {

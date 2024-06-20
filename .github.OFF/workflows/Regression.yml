@@ -7,8 +7,6 @@ on:
       - '**'
       - '!main'
       - '!feature'
-    tags:
-      - '**'
     paths-ignore:
       - '**.md'
       - 'tools/**'
@@ -40,7 +38,6 @@ jobs:
  regression-test-benchmark-runner:
   name: Regression Tests
   runs-on: ubuntu-20.04
-  if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
   env:
     CC: gcc-10
     CXX: g++-10
@@ -56,9 +53,9 @@ jobs:
       with:
         fetch-depth: 0
 
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
-        python-version: '3.7'
+        python-version: '3.12'
 
     - name: Install
       shell: bash
@@ -132,10 +129,27 @@ jobs:
       run: |
         python scripts/regression_test_runner.py --old=duckdb/build/release/benchmark/benchmark_runner --new=build/release/benchmark/benchmark_runner --benchmarks=.github/regression/csv.csv --verbose --threads=2
 
+    - name: Regression Test new micro benchmark
+      if: github.event_name == 'pull_request'
+      shell: bash
+      run: |
+        target_branch="${{ github.event.pull_request.base.ref }}"
+
+        git remote add base ${{ github.event.pull_request.base.repo.html_url }}
+        git fetch base
+
+        git diff --name-only "base/$target_branch" | (grep "benchmark/micro/*.benchmark" || true) > .github/regression/updated_micro_benchmarks.csv
+        if [ $(wc -l < .github/regression/updated_micro_benchmarks.csv) -gt 0 ]; then
+          echo "Detected the following modified benchmarks. Running a regression test"
+          cat .github/regression/updated_micro_benchmarks.csv
+          python scripts/regression_test_runner.py --old=duckdb/build/release/benchmark/benchmark_runner --new=build/release/benchmark/benchmark_runner --benchmarks=.github/regression/updated_micro_benchmarks.csv --verbose --threads=2
+        else
+          echo "No modified micro benchmarks"
+        fi
+
  regression-test-storage:
   name: Storage Size Regression Test
   runs-on: ubuntu-20.04
-  if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
   env:
     CC: gcc-10
     CXX: g++-10
@@ -148,9 +162,9 @@ jobs:
       with:
         fetch-depth: 0
 
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
-        python-version: '3.7'
+        python-version: '3.12'
 
     - name: Install
       shell: bash
@@ -217,7 +231,6 @@ jobs:
  regression-test-python:
   name: Regression Test (Python Client)
   runs-on: ubuntu-20.04
-  if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
   env:
     CC: gcc-10
     CXX: g++-10
@@ -228,7 +241,7 @@ jobs:
       with:
         fetch-depth: 0
 
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
         python-version: '3.11'
 
@@ -236,7 +249,7 @@ jobs:
       shell: bash
       run: |
         sudo apt-get update -y -qq && sudo apt-get install -y -qq ninja-build
-        pip install numpy pytest pandas mypy psutil "pyarrow<=11.0.0"
+        pip install numpy pytest pandas mypy psutil pyarrow
 
     - name: Setup Ccache
       uses: hendrikmuhs/ccache-action@main
@@ -285,7 +298,6 @@ jobs:
  regression-test-plan-cost:
   name: Regression Test Join Order Plan Cost
   runs-on: ubuntu-20.04
-  if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
   env:
     CC: gcc-10
     CXX: g++-10
@@ -298,9 +310,9 @@ jobs:
       with:
         fetch-depth: 0
 
-    - uses: actions/setup-python@v4
+    - uses: actions/setup-python@v5
       with:
-        python-version: '3.7'
+        python-version: '3.12'
 
     - name: Install
       shell: bash

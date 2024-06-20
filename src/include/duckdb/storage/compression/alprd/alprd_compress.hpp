@@ -34,7 +34,7 @@ template <class T>
 struct AlpRDCompressionState : public CompressionState {
 
 public:
-	using EXACT_TYPE = typename FloatingToExact<T>::type;
+	using EXACT_TYPE = typename FloatingToExact<T>::TYPE;
 	explicit AlpRDCompressionState(ColumnDataCheckpointer &checkpointer, AlpRDAnalyzeState<T> *analyze_state)
 	    : checkpointer(checkpointer),
 	      function(checkpointer.GetCompressionFunction(CompressionType::COMPRESSION_ALPRD)) {
@@ -168,7 +168,7 @@ public:
 		// Write pointer to the vector data (metadata)
 		metadata_ptr -= AlpRDConstants::METADATA_POINTER_SIZE;
 		Store<uint32_t>(next_vector_byte_index_start, metadata_ptr);
-		next_vector_byte_index_start = UsedSpace();
+		next_vector_byte_index_start = NumericCast<uint32_t>(UsedSpace());
 
 		vectors_flushed++;
 		vector_idx = 0;
@@ -185,10 +185,10 @@ public:
 		// Verify that the metadata_ptr is not smaller than the space used by the data
 		D_ASSERT(dataptr + metadata_offset <= metadata_ptr);
 
-		idx_t bytes_used_by_metadata = dataptr + Storage::BLOCK_SIZE - metadata_ptr;
+		auto bytes_used_by_metadata = UnsafeNumericCast<idx_t>(dataptr + Storage::BLOCK_SIZE - metadata_ptr);
 
 		// Initially the total segment size is the size of the block
-		idx_t total_segment_size = Storage::BLOCK_SIZE;
+		auto total_segment_size = Storage::BLOCK_SIZE;
 
 		//! We compact the block if the space used is less than a threshold
 		const auto used_space_percentage =
@@ -208,7 +208,7 @@ public:
 		}
 
 		// Store the offset to the end of metadata (to be used as a backwards pointer in decoding)
-		Store<uint32_t>(total_segment_size, dataptr);
+		Store<uint32_t>(NumericCast<uint32_t>(total_segment_size), dataptr);
 		dataptr += AlpRDConstants::METADATA_POINTER_SIZE;
 
 		// Store the right bw for the segment
@@ -261,7 +261,7 @@ public:
 					EXACT_TYPE value = Load<EXACT_TYPE>(const_data_ptr_cast(&data[idx]));
 					bool is_null = !vdata.validity.RowIsValid(idx);
 					//! We resolve null values with a predicated comparison
-					vector_null_positions[nulls_idx] = vector_idx + i;
+					vector_null_positions[nulls_idx] = UnsafeNumericCast<uint16_t>(vector_idx + i);
 					nulls_idx += is_null;
 					input_vector[vector_idx + i] = value;
 				}

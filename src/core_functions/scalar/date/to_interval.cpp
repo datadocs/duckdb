@@ -65,6 +65,20 @@ struct ToYearsOperator {
 	}
 };
 
+struct ToQuartersOperator {
+	template <class TA, class TR>
+	static inline TR Operation(TA input) {
+		interval_t result;
+		if (!TryMultiplyOperator::Operation<int32_t, int32_t, int32_t>(input, Interval::MONTHS_PER_QUARTER,
+		                                                               result.months)) {
+			throw OutOfRangeException("Interval value %d quarters out of range", input);
+		}
+		result.days = 0;
+		result.micros = 0;
+		return result;
+	}
+};
+
 struct ToMonthsOperator {
 	template <class TA, class TR>
 	static inline TR Operation(TA input) {
@@ -81,7 +95,9 @@ struct ToWeeksOperator {
 	static inline TR Operation(TA input) {
 		interval_t result;
 		result.months = 0;
-		result.days = input * 7;
+		if (!TryMultiplyOperator::Operation<int32_t, int32_t, int32_t>(input, Interval::DAYS_PER_WEEK, result.days)) {
+			throw OutOfRangeException("Interval value %d weeks out of range", input);
+		}
 		result.micros = 0;
 		return result;
 	}
@@ -166,6 +182,11 @@ ScalarFunction ToDecadesFun::GetFunction() {
 ScalarFunction ToYearsFun::GetFunction() {
 	return ScalarFunction({LogicalType::INTEGER}, LogicalType::INTERVAL,
 	                      ScalarFunction::UnaryFunction<int32_t, interval_t, ToYearsOperator>);
+}
+
+ScalarFunction ToQuartersFun::GetFunction() {
+	return ScalarFunction({LogicalType::INTEGER}, LogicalType::INTERVAL,
+	                      ScalarFunction::UnaryFunction<int32_t, interval_t, ToQuartersOperator>);
 }
 
 ScalarFunction ToMonthsFun::GetFunction() {

@@ -34,7 +34,6 @@ add_library_unity(
   compressed_file_system.cpp
   constants.cpp
   checksum.cpp
-  cycle_counter.cpp
   exception.cpp
   exception_format_value.cpp
   extra_type_info.cpp
@@ -47,6 +46,7 @@ add_library_unity(
   http_state.cpp
   pipe_file_system.cpp
   local_file_system.cpp
+  multi_file_list.cpp
   multi_file_reader.cpp
   error_data.cpp
   printer.cpp

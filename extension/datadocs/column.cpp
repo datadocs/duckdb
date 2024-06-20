@@ -297,21 +297,23 @@ IngestColNUMERIC::IngestColNUMERIC(string name, idx_t &cur_row, uint8_t i_digits
 
 bool IngestColNUMERIC::Write(string_t v) {
 	string message;
+	CastParameters parameters(false, &message);
 	switch (storage_type) {
-	case 0: return TryCastToDecimal::Operation(v, Writer().Get<int16_t>(), &message, width, scale);
-	case 1: return TryCastToDecimal::Operation(v, Writer().Get<int32_t>(), &message, width, scale);
-	case 2: return TryCastToDecimal::Operation(v, Writer().Get<int64_t>(), &message, width, scale);
-	default: return TryCastToDecimal::Operation(v, Writer().Get<hugeint_t>(), &message, width, scale);
+	case 0: return TryCastToDecimal::Operation(v, Writer().Get<int16_t>(), parameters, width, scale);
+	case 1: return TryCastToDecimal::Operation(v, Writer().Get<int32_t>(), parameters, width, scale);
+	case 2: return TryCastToDecimal::Operation(v, Writer().Get<int64_t>(), parameters, width, scale);
+	default: return TryCastToDecimal::Operation(v, Writer().Get<hugeint_t>(), parameters, width, scale);
 	}
 }
 
 bool IngestColNUMERIC::Write(int64_t v) {
 	string message;
+	CastParameters parameters(false, &message);
 	switch (storage_type) {
-	case 0: return TryCastToDecimal::Operation(v, Writer().Get<int16_t>(), &message, width, scale);
-	case 1: return TryCastToDecimal::Operation(v, Writer().Get<int32_t>(), &message, width, scale);
-	case 2: return TryCastToDecimal::Operation(v, Writer().Get<int64_t>(), &message, width, scale);
-	default: return TryCastToDecimal::Operation(v, Writer().Get<hugeint_t>(), &message, width, scale);
+	case 0: return TryCastToDecimal::Operation(v, Writer().Get<int16_t>(), parameters, width, scale);
+	case 1: return TryCastToDecimal::Operation(v, Writer().Get<int32_t>(), parameters, width, scale);
+	case 2: return TryCastToDecimal::Operation(v, Writer().Get<int64_t>(), parameters, width, scale);
+	default: return TryCastToDecimal::Operation(v, Writer().Get<hugeint_t>(), parameters, width, scale);
 	}
 }
 
@@ -321,11 +323,12 @@ bool IngestColNUMERIC::Write(bool v) {
 
 bool IngestColNUMERIC::Write(double v) {
 	string message;
+	CastParameters parameters(false, &message);
 	switch (storage_type) {
-	case 0: return TryCastToDecimal::Operation(v, Writer().Get<int16_t>(), &message, width, scale);
-	case 1: return TryCastToDecimal::Operation(v, Writer().Get<int32_t>(), &message, width, scale);
-	case 2: return TryCastToDecimal::Operation(v, Writer().Get<int64_t>(), &message, width, scale);
-	default: return TryCastToDecimal::Operation(v, Writer().Get<hugeint_t>(), &message, width, scale);
+	case 0: return TryCastToDecimal::Operation(v, Writer().Get<int16_t>(), parameters, width, scale);
+	case 1: return TryCastToDecimal::Operation(v, Writer().Get<int32_t>(), parameters, width, scale);
+	case 2: return TryCastToDecimal::Operation(v, Writer().Get<int64_t>(), parameters, width, scale);
+	default: return TryCastToDecimal::Operation(v, Writer().Get<hugeint_t>(), parameters, width, scale);
 	}
 }
 

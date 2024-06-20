@@ -22,10 +22,10 @@ static inline LogicalTypeId MaxNumericType(LogicalTypeId &a, LogicalTypeId &b) {
 JSONStructureNode::JSONStructureNode() : initialized(false), count(0) {
 }
 
-JSONStructureNode::JSONStructureNode(yyjson_val *key_p, yyjson_val *val_p)
+JSONStructureNode::JSONStructureNode(yyjson_val *key_p, yyjson_val *val_p, const bool ignore_errors)
     : key(make_uniq<string>(unsafe_yyjson_get_str(key_p), unsafe_yyjson_get_len(key_p))), initialized(false), count(0) {
 	D_ASSERT(yyjson_is_str(key_p));
-	JSONStructure::ExtractStructure(val_p, *this);
+	JSONStructure::ExtractStructure(val_p, *this, ignore_errors);
 }
 
 JSONStructureNode::JSONStructureNode(JSONStructureNode &&other) noexcept {
@@ -351,7 +351,8 @@ JSONStructureNode &JSONStructureDescription::GetOrCreateChild() {
 	return children.back();
 }
 
-JSONStructureNode &JSONStructureDescription::GetOrCreateChild(yyjson_val *key, yyjson_val *val) {
+JSONStructureNode &JSONStructureDescription::GetOrCreateChild(yyjson_val *key, yyjson_val *val,
+                                                              const bool ignore_errors) {
 	D_ASSERT(yyjson_is_str(key));
 	// Check if there is already a child with the same key
 	idx_t child_idx;
@@ -359,18 +360,18 @@ JSONStructureNode &JSONStructureDescription::GetOrCreateChild(yyjson_val *key, y
 	auto it = key_map.find(temp_key);
 	if (it == key_map.end()) { // Didn't find, create a new child
 		child_idx = children.size();
-		children.emplace_back(key, val);
+		children.emplace_back(key, val, ignore_errors);
 		const auto &persistent_key_string = children.back().key;
 		JSONKey new_key {persistent_key_string->c_str(), persistent_key_string->length()};
 		key_map.emplace(new_key, child_idx);
 	} else { // Found it
 		child_idx = it->second;
-		JSONStructure::ExtractStructure(val, children[child_idx]);
+		JSONStructure::ExtractStructure(val, children[child_idx], ignore_errors);
 	}
 	return children[child_idx];
 }
 
-static inline void ExtractStructureArray(yyjson_val *arr, JSONStructureNode &node) {
+static inline void ExtractStructureArray(yyjson_val *arr, JSONStructureNode &node, const bool ignore_errors) {
 	D_ASSERT(yyjson_is_arr(arr));
 	auto &description = node.GetOrCreateDescription(LogicalTypeId::LIST);
 	auto &child = description.GetOrCreateChild();
@@ -378,27 +379,33 @@ static inline void ExtractStructureArray(yyjson_val *arr, JSONStructureNode &nod
 	size_t idx, max;
 	yyjson_val *val;
 	yyjson_arr_foreach(arr, idx, max, val) {
-		JSONStructure::ExtractStructure(val, child);
+		JSONStructure::ExtractStructure(val, child, ignore_errors);
 	}
 }
 
-static inline void ExtractStructureObject(yyjson_val *obj, JSONStructureNode &node) {
+static inline void ExtractStructureObject(yyjson_val *obj, JSONStructureNode &node, const bool ignore_errors) {
 	D_ASSERT(yyjson_is_obj(obj));
 	auto &description = node.GetOrCreateDescription(LogicalTypeId::STRUCT);
 
 	// Keep track of keys so we can detect duplicates
-	json_key_set_t obj_keys;
+	unordered_set<string> obj_keys;
+	case_insensitive_set_t ci_obj_keys;
 
 	size_t idx, max;
 	yyjson_val *key, *val;
 	yyjson_obj_foreach(obj, idx, max, key, val) {
-		auto key_ptr = unsafe_yyjson_get_str(key);
-		auto key_len = unsafe_yyjson_get_len(key);
-		auto insert_result = obj_keys.insert({key_ptr, key_len});
-		if (!insert_result.second) {
-			JSONCommon::ThrowValFormatError("Duplicate key \"" + string(key_ptr, key_len) + "\" in object %s", obj);
+		const string obj_key(unsafe_yyjson_get_str(key), unsafe_yyjson_get_len(key));
+		auto insert_result = obj_keys.insert(obj_key);
+		if (!ignore_errors && !insert_result.second) { // Exact match
+			JSONCommon::ThrowValFormatError("Duplicate key \"" + obj_key + "\" in object %s", obj);
 		}
-		description.GetOrCreateChild(key, val);
+		insert_result = ci_obj_keys.insert(obj_key);
+		if (!ignore_errors && !insert_result.second) { // Case-insensitive match
+			JSONCommon::ThrowValFormatError("Duplicate key (different case) \"" + obj_key + "\" and \"" +
+			                                    *insert_result.first + "\" in object %s",
+			                                obj);
+		}
+		description.GetOrCreateChild(key, val, ignore_errors);
 	}
 }
 
@@ -407,21 +414,21 @@ static inline void ExtractStructureVal(yyjson_val *val, JSONStructureNode &node)
 	node.GetOrCreateDescription(JSONCommon::ValTypeToLogicalTypeId(val));
 }
 
-void JSONStructure::ExtractStructure(yyjson_val *val, JSONStructureNode &node) {
+void JSONStructure::ExtractStructure(yyjson_val *val, JSONStructureNode &node, const bool ignore_errors) {
 	node.count++;
 	switch (yyjson_get_tag(val)) {
 	case YYJSON_TYPE_ARR | YYJSON_SUBTYPE_NONE:
-		return ExtractStructureArray(val, node);
+		return ExtractStructureArray(val, node, ignore_errors);
 	case YYJSON_TYPE_OBJ | YYJSON_SUBTYPE_NONE:
-		return ExtractStructureObject(val, node);
+		return ExtractStructureObject(val, node, ignore_errors);
 	default:
 		return ExtractStructureVal(val, node);
 	}
 }
 
-JSONStructureNode ExtractStructureInternal(yyjson_val *val) {
+JSONStructureNode ExtractStructureInternal(yyjson_val *val, const bool ignore_errors) {
 	JSONStructureNode node;
-	JSONStructure::ExtractStructure(val, node);
+	JSONStructure::ExtractStructure(val, node, ignore_errors);
 	return node;
 }
 
@@ -474,9 +481,9 @@ static inline yyjson_mut_val *ConvertStructure(const JSONStructureNode &node, yy
 	}
 }
 
-static inline string_t JSONStructureFunction(yyjson_val *val, yyjson_alc *alc, Vector &result) {
+static inline string_t JSONStructureFunction(yyjson_val *val, yyjson_alc *alc, Vector &) {
 	return JSONCommon::WriteVal<yyjson_mut_val>(
-	    ConvertStructure(ExtractStructureInternal(val), yyjson_mut_doc_new(alc)), alc);
+	    ConvertStructure(ExtractStructureInternal(val, true), yyjson_mut_doc_new(alc)), alc);
 }
 
 static void StructureFunction(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -496,8 +503,7 @@ ScalarFunctionSet JSONFunctions::GetStructureFunction() {
 }
 
 static LogicalType StructureToTypeArray(ClientContext &context, const JSONStructureNode &node, const idx_t max_depth,
-                                        const double field_appearance_threshold, idx_t depth,
-                                        const idx_t sample_count) {
+                                        const double field_appearance_threshold, idx_t depth) {
 	D_ASSERT(node.descriptions.size() == 1 && node.descriptions[0].type == LogicalTypeId::LIST);
 	const auto &desc = node.descriptions[0];
 	D_ASSERT(desc.children.size() == 1);
@@ -564,7 +570,7 @@ LogicalType JSONStructure::StructureToType(ClientContext &context, const JSONStr
 	D_ASSERT(desc.type != LogicalTypeId::INVALID);
 	switch (desc.type) {
 	case LogicalTypeId::LIST:
-		return StructureToTypeArray(context, node, max_depth, field_appearance_threshold, depth, sample_count);
+		return StructureToTypeArray(context, node, max_depth, field_appearance_threshold, depth);
 	case LogicalTypeId::STRUCT:
 		return StructureToTypeObject(context, node, max_depth, field_appearance_threshold, depth, sample_count);
 	case LogicalTypeId::VARCHAR:

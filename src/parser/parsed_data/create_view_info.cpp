@@ -30,11 +30,10 @@ string CreateViewInfo::ToString() const {
 		result += " TEMPORARY";
 	}
 	result += " VIEW ";
-	if (schema != DEFAULT_SCHEMA) {
-		result += KeywordHelper::WriteOptionallyQuoted(schema);
-		result += ".";
+	if (on_conflict == OnCreateConflict::IGNORE_ON_CONFLICT) {
+		result += " IF NOT EXISTS ";
 	}
-	result += KeywordHelper::WriteOptionallyQuoted(view_name);
+	result += QualifierToString(temporary ? "" : catalog, schema, view_name);
 	if (!aliases.empty()) {
 		result += " (";
 		result += StringUtil::Join(aliases, aliases.size(), ", ",
@@ -43,6 +42,7 @@ string CreateViewInfo::ToString() const {
 	}
 	result += " AS ";
 	result += query->ToString();
+	result += ";";
 	return result;
 }
 
@@ -51,6 +51,7 @@ unique_ptr<CreateInfo> CreateViewInfo::Copy() const {
 	CopyProperties(*result);
 	result->aliases = aliases;
 	result->types = types;
+	result->column_comments = column_comments;
 	result->query = unique_ptr_cast<SQLStatement, SelectStatement>(query->Copy());
 	return std::move(result);
 }

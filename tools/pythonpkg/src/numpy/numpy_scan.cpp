@@ -153,8 +153,6 @@ static void VerifyMapConstraints(Vector &vec, idx_t count) {
 		return;
 	case MapInvalidReason::DUPLICATE_KEY:
 		throw InvalidInputException("Dict->Map conversion failed because 'key' list contains duplicates");
-	case MapInvalidReason::NULL_KEY_LIST:
-		throw InvalidInputException("Dict->Map conversion failed because 'key' list is None");
 	case MapInvalidReason::NULL_KEY:
 		throw InvalidInputException("Dict->Map conversion failed because 'key' list contains None");
 	default:
@@ -199,6 +197,7 @@ void NumpyScan::Scan(PandasColumnBindData &bind_data, idx_t count, idx_t offset,
 	D_ASSERT(bind_data.pandas_col->Backend() == PandasColumnBackend::NUMPY);
 	auto &numpy_col = reinterpret_cast<PandasNumpyColumn &>(*bind_data.pandas_col);
 	auto &array = numpy_col.array;
+	auto stride = numpy_col.stride;
 
 	switch (bind_data.numpy_type.type) {
 	case NumpyNullableType::BOOL:
@@ -278,12 +277,13 @@ void NumpyScan::Scan(PandasColumnBindData &bind_data, idx_t count, idx_t offset,
 		};
 
 		for (idx_t row = 0; row < count; row++) {
-			auto source_idx = offset + row;
+			auto source_idx = stride / sizeof(int64_t) * (row + offset);
 			if (src_ptr[source_idx] <= NumericLimits<int64_t>::Minimum()) {
 				// pandas Not a Time (NaT)
 				mask.SetInvalid(row);
 				continue;
 			}
+
 			// Direct conversion, we've already matched the numpy type with the equivalent duckdb type
 			auto input = timestamp_t(src_ptr[source_idx]);
 			if (Timestamp::IsFinite(input)) {
@@ -300,7 +300,7 @@ void NumpyScan::Scan(PandasColumnBindData &bind_data, idx_t count, idx_t offset,
 		auto &mask = FlatVector::Validity(out);
 
 		for (idx_t row = 0; row < count; row++) {
-			auto source_idx = offset + row;
+			auto source_idx = stride / sizeof(int64_t) * (row + offset);
 			if (src_ptr[source_idx] <= NumericLimits<int64_t>::Minimum()) {
 				// pandas Not a Time (NaT)
 				mask.SetInvalid(row);

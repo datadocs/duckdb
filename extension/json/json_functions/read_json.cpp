@@ -3,8 +3,38 @@
 #include "json_scan.hpp"
 #include "json_structure.hpp"
 #include "json_transform.hpp"
+#include "duckdb/common/helper.hpp"
 
 namespace duckdb {
+
+static inline LogicalType RemoveDuplicateStructKeys(const LogicalType &type, const bool ignore_errors) {
+	switch (type.id()) {
+	case LogicalTypeId::STRUCT: {
+		case_insensitive_set_t child_names;
+		child_list_t<LogicalType> child_types;
+		for (auto &child_type : StructType::GetChildTypes(type)) {
+			auto insert_success = child_names.insert(child_type.first).second;
+			if (!insert_success) {
+				if (ignore_errors) {
+					continue;
+				}
+				throw NotImplementedException(
+				    "Duplicate name \"%s\" in struct auto-detected in JSON, try ignore_errors=true", child_type.first);
+			} else {
+				child_types.emplace_back(child_type.first, RemoveDuplicateStructKeys(child_type.second, ignore_errors));
+			}
+		}
+		return LogicalType::STRUCT(child_types);
+	}
+	case LogicalTypeId::MAP:
+		return LogicalType::MAP(RemoveDuplicateStructKeys(MapType::KeyType(type), ignore_errors),
+		                        RemoveDuplicateStructKeys(MapType::ValueType(type), ignore_errors));
+	case LogicalTypeId::LIST:
+		return LogicalType::LIST(RemoveDuplicateStructKeys(ListType::GetChildType(type), ignore_errors));
+	default:
+		return type;
+	}
+}
 
 void JSONScan::AutoDetect(ClientContext &context, JSONScanData &bind_data, vector<LogicalType> &return_types,
                           vector<string> &names) {
@@ -40,7 +70,7 @@ void JSONScan::AutoDetect(ClientContext &context, JSONScanData &bind_data, vecto
 			for (idx_t i = 0; i < next; i++) {
 				const auto &val = lstate.values[i];
 				if (val) {
-					JSONStructure::ExtractStructure(val, node);
+					JSONStructure::ExtractStructure(val, node, true);
 				}
 			}
 			if (!node.ContainsVarchar()) { // Can't refine non-VARCHAR types
@@ -94,7 +124,7 @@ void JSONScan::AutoDetect(ClientContext &context, JSONScanData &bind_data, vecto
 			return_types.reserve(child_types.size());
 			names.reserve(child_types.size());
 			for (auto &child_type : child_types) {
-				return_types.emplace_back(child_type.second);
+				return_types.emplace_back(RemoveDuplicateStructKeys(child_type.second, bind_data.ignore_errors));
 				names.emplace_back(child_type.first);
 			}
 		} else {
@@ -103,7 +133,7 @@ void JSONScan::AutoDetect(ClientContext &context, JSONScanData &bind_data, vecto
 		}
 	} else {
 		D_ASSERT(bind_data.options.record_type == JSONRecordType::VALUES);
-		return_types.emplace_back(type);
+		return_types.emplace_back(RemoveDuplicateStructKeys(type, bind_data.ignore_errors));
 		names.emplace_back("json");
 	}
 }
@@ -216,6 +246,11 @@ unique_ptr<FunctionData> ReadJSONBind(ClientContext &context, TableFunctionBindI
 		}
 	}
 
+	if (bind_data->options.record_type == JSONRecordType::AUTO_DETECT && return_types.size() > 1) {
+		// More than one specified column implies records
+		bind_data->options.record_type = JSONRecordType::RECORDS;
+	}
+
 	// Specifying column names overrides auto-detect
 	if (!return_types.empty()) {
 		bind_data->auto_detect = false;
@@ -242,8 +277,10 @@ unique_ptr<FunctionData> ReadJSONBind(ClientContext &context, TableFunctionBindI
 		D_ASSERT(return_types.size() == names.size());
 	}
 
-	bind_data->reader_bind =
-	    MultiFileReader::BindOptions(bind_data->options.file_options, bind_data->files, return_types, names);
+	SimpleMultiFileList file_list(std::move(bind_data->files));
+	MultiFileReader().BindOptions(bind_data->options.file_options, file_list, return_types, names,
+	                              bind_data->reader_bind);
+	bind_data->files = file_list.GetAllFiles();
 
 	auto &transform_options = bind_data->transform_options;
 	transform_options.strict_cast = !bind_data->ignore_errors;
@@ -310,7 +347,7 @@ static void ReadJSONFunction(ClientContext &context, TableFunctionInput &data_p,
 	}
 
 	if (output.size() != 0) {
-		MultiFileReader::FinalizeChunk(gstate.bind_data.reader_bind, lstate.GetReaderData(), output);
+		MultiFileReader().FinalizeChunk(context, gstate.bind_data.reader_bind, lstate.GetReaderData(), output, nullptr);
 	}
 }
 
@@ -347,26 +384,26 @@ TableFunctionSet CreateJSONFunctionInfo(string name, shared_ptr<JSONScanInfo> in
 }
 
 TableFunctionSet JSONFunctions::GetReadJSONFunction() {
-	auto info =
-	    make_shared<JSONScanInfo>(JSONScanType::READ_JSON, JSONFormat::AUTO_DETECT, JSONRecordType::AUTO_DETECT, true);
+	auto info = make_shared_ptr<JSONScanInfo>(JSONScanType::READ_JSON, JSONFormat::AUTO_DETECT,
+	                                          JSONRecordType::AUTO_DETECT, true);
 	return CreateJSONFunctionInfo("read_json", std::move(info));
 }
 
 TableFunctionSet JSONFunctions::GetReadNDJSONFunction() {
-	auto info = make_shared<JSONScanInfo>(JSONScanType::READ_JSON, JSONFormat::NEWLINE_DELIMITED,
-	                                      JSONRecordType::AUTO_DETECT, true);
+	auto info = make_shared_ptr<JSONScanInfo>(JSONScanType::READ_JSON, JSONFormat::NEWLINE_DELIMITED,
+	                                          JSONRecordType::AUTO_DETECT, true);
 	return CreateJSONFunctionInfo("read_ndjson", std::move(info));
 }
 
 TableFunctionSet JSONFunctions::GetReadJSONAutoFunction() {
-	auto info =
-	    make_shared<JSONScanInfo>(JSONScanType::READ_JSON, JSONFormat::AUTO_DETECT, JSONRecordType::AUTO_DETECT, true);
+	auto info = make_shared_ptr<JSONScanInfo>(JSONScanType::READ_JSON, JSONFormat::AUTO_DETECT,
+	                                          JSONRecordType::AUTO_DETECT, true);
 	return CreateJSONFunctionInfo("read_json_auto", std::move(info));
 }
 
 TableFunctionSet JSONFunctions::GetReadNDJSONAutoFunction() {
-	auto info = make_shared<JSONScanInfo>(JSONScanType::READ_JSON, JSONFormat::NEWLINE_DELIMITED,
-	                                      JSONRecordType::AUTO_DETECT, true);
+	auto info = make_shared_ptr<JSONScanInfo>(JSONScanType::READ_JSON, JSONFormat::NEWLINE_DELIMITED,
+	                                          JSONRecordType::AUTO_DETECT, true);
 	return CreateJSONFunctionInfo("read_ndjson_auto", std::move(info));
 }
 

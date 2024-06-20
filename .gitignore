@@ -295,6 +295,7 @@ cmake_build
 cmake-build-debug
 cmake-build-release
 cmake-build-relwithdebinfo
+CMakeUserPresets.json
 
 # Generated documentation
 docs
@@ -343,6 +344,7 @@ zig-cache/*
 
 # .db files
 *.db
+*.db.gz
 
 # local cmake extension config
 extension/extension_config_local.cmake

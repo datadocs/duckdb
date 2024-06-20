@@ -4,6 +4,12 @@
 using namespace duckdb;
 using namespace std;
 
+void TestAppenderError(duckdb_appender &appender, const string &expected) {
+	auto error = duckdb_appender_error(appender);
+	REQUIRE(error != nullptr);
+	REQUIRE(duckdb::StringUtil::Contains(error, expected));
+}
+
 void AssertDecimalValueMatches(duckdb::unique_ptr<CAPIResult> &result, duckdb_decimal expected) {
 	duckdb_decimal actual;
 
@@ -88,69 +94,135 @@ TEST_CASE("Test appending into DECIMAL in C API", "[capi]") {
 	TestAppendingSingleDecimalValue<double, &duckdb_append_double>(12345234234.31243244234324, expected, 26, 1);
 }
 
-TEST_CASE("Test appender statements in C API", "[capi]") {
+TEST_CASE("Test NULL struct Appender", "[capi]") {
 	CAPITester tester;
 	duckdb::unique_ptr<CAPIResult> result;
 	duckdb_state status;
 
-	// open the database in in-memory mode
 	REQUIRE(tester.OpenDatabase(nullptr));
-
-	tester.Query("CREATE TABLE test (i INTEGER, d double, s string)");
+	tester.Query("CREATE TABLE test (simple_struct STRUCT(a INTEGER, b VARCHAR));");
 	duckdb_appender appender;
-
-	status = duckdb_appender_create(tester.connection, nullptr, "nonexistant-table", &appender);
-	REQUIRE(status == DuckDBError);
-	REQUIRE(appender != nullptr);
-	REQUIRE(duckdb_appender_error(appender) != nullptr);
-	REQUIRE(duckdb_appender_destroy(&appender) == DuckDBSuccess);
-	REQUIRE(duckdb_appender_destroy(nullptr) == DuckDBError);
-
-	status = duckdb_appender_create(tester.connection, nullptr, "test", nullptr);
-	REQUIRE(status == DuckDBError);
 
 	status = duckdb_appender_create(tester.connection, nullptr, "test", &appender);
 	REQUIRE(status == DuckDBSuccess);
 	REQUIRE(duckdb_appender_error(appender) == nullptr);
 
-	status = duckdb_appender_begin_row(appender);
+	// create the column types of the data chunk
+	duckdb::vector<duckdb_logical_type> child_types = {duckdb_create_logical_type(DUCKDB_TYPE_INTEGER),
+	                                                   duckdb_create_logical_type(DUCKDB_TYPE_VARCHAR)};
+	duckdb::vector<const char *> names = {"a", "b"};
+	auto struct_type = duckdb_create_struct_type(child_types.data(), names.data(), child_types.size());
+
+	// create the data chunk
+	duckdb_logical_type types[1] = {struct_type};
+	auto data_chunk = duckdb_create_data_chunk(types, 1);
+	REQUIRE(data_chunk);
+	REQUIRE(duckdb_data_chunk_get_column_count(data_chunk) == 1);
+
+	auto struct_vector = duckdb_data_chunk_get_vector(data_chunk, 0);
+	auto first_child_vector = duckdb_struct_vector_get_child(struct_vector, 0);
+	auto second_child_vector = duckdb_struct_vector_get_child(struct_vector, 1);
+
+	// set two values
+	auto first_child_ptr = (int64_t *)duckdb_vector_get_data(first_child_vector);
+	*first_child_ptr = 42;
+	duckdb_vector_assign_string_element(second_child_vector, 0, "hello");
+
+	// set the parent/STRUCT vector to NULL
+	duckdb_vector_ensure_validity_writable(struct_vector);
+	auto validity = duckdb_vector_get_validity(struct_vector);
+	duckdb_validity_set_row_validity(validity, 1, false);
+
+	// set the first child vector to NULL
+	duckdb_vector_ensure_validity_writable(first_child_vector);
+	auto first_validity = duckdb_vector_get_validity(first_child_vector);
+	duckdb_validity_set_row_validity(first_validity, 1, false);
+
+	// set the second child vector to NULL
+	duckdb_vector_ensure_validity_writable(second_child_vector);
+	auto second_validity = duckdb_vector_get_validity(second_child_vector);
+	duckdb_validity_set_row_validity(second_validity, 1, false);
+
+	duckdb_data_chunk_set_size(data_chunk, 2);
+	REQUIRE(duckdb_append_data_chunk(appender, data_chunk) == DuckDBSuccess);
+
+	// close flushes all remaining data
+	status = duckdb_appender_close(appender);
 	REQUIRE(status == DuckDBSuccess);
 
-	status = duckdb_append_int32(appender, 42);
+	// verify the result
+	result = tester.Query("SELECT simple_struct::VARCHAR FROM test;");
+	REQUIRE_NO_FAIL(*result);
+	REQUIRE(result->Fetch<string>(0, 0) == "{'a': 42, 'b': hello}");
+	REQUIRE(result->Fetch<string>(0, 1) == "");
+
+	// destroy the data chunk and the appender
+	duckdb_destroy_data_chunk(&data_chunk);
+	status = duckdb_appender_destroy(&appender);
 	REQUIRE(status == DuckDBSuccess);
 
-	status = duckdb_append_double(appender, 4.2);
-	REQUIRE(status == DuckDBSuccess);
+	// destroy the logical types
+	for (auto child_type : child_types) {
+		duckdb_destroy_logical_type(&child_type);
+	}
+	duckdb_destroy_logical_type(&struct_type);
+}
 
-	status = duckdb_append_varchar(appender, "Hello, World");
-	REQUIRE(status == DuckDBSuccess);
+TEST_CASE("Test appender statements in C API", "[capi]") {
+	CAPITester tester;
+	duckdb::unique_ptr<CAPIResult> result;
+	duckdb_state status;
 
-	// out of cols here
-	status = duckdb_append_int32(appender, 42);
-	REQUIRE(status == DuckDBError);
+	REQUIRE(tester.OpenDatabase(nullptr));
+	tester.Query("CREATE TABLE test (i INTEGER, d double, s string)");
+	duckdb_appender appender;
 
-	status = duckdb_appender_end_row(appender);
-	REQUIRE(status == DuckDBSuccess);
+	// Creating the table with an unknown table fails, but creates an appender object.
+	REQUIRE(duckdb_appender_create(tester.connection, nullptr, "unknown_table", &appender) == DuckDBError);
+	REQUIRE(appender != nullptr);
+	TestAppenderError(appender, "could not be found");
 
-	status = duckdb_appender_flush(appender);
-	REQUIRE(status == DuckDBSuccess);
+	// Flushing, closing, or destroying the appender also fails due to its invalid table.
+	REQUIRE(duckdb_appender_close(appender) == DuckDBError);
+	TestAppenderError(appender, "could not be found");
 
-	status = duckdb_appender_begin_row(appender);
-	REQUIRE(status == DuckDBSuccess);
+	// Any data is still destroyed, so there are no leaks, even if duckdb_appender_destroy returns DuckDBError.
+	REQUIRE(duckdb_appender_destroy(&appender) == DuckDBError);
+	REQUIRE(duckdb_appender_destroy(nullptr) == DuckDBError);
 
-	status = duckdb_append_int32(appender, 42);
-	REQUIRE(status == DuckDBSuccess);
+	// Appender creation also fails if not providing an appender object.
+	REQUIRE(duckdb_appender_create(tester.connection, nullptr, "test", nullptr) == DuckDBError);
 
-	status = duckdb_append_double(appender, 4.2);
-	REQUIRE(status == DuckDBSuccess);
+	// Now, create a valid appender.
+	REQUIRE(duckdb_appender_create(tester.connection, nullptr, "test", &appender) == DuckDBSuccess);
+	REQUIRE(duckdb_appender_error(appender) == nullptr);
 
-	// not enough cols here
-	status = duckdb_appender_end_row(appender);
-	REQUIRE(status == DuckDBError);
+	// Start appending rows.
+	REQUIRE(duckdb_appender_begin_row(appender) == DuckDBSuccess);
+	REQUIRE(duckdb_append_int32(appender, 42) == DuckDBSuccess);
+	REQUIRE(duckdb_append_double(appender, 4.2) == DuckDBSuccess);
+	REQUIRE(duckdb_append_varchar(appender, "Hello, World") == DuckDBSuccess);
+
+	// Exceed the column count.
+	REQUIRE(duckdb_append_int32(appender, 42) == DuckDBError);
+	TestAppenderError(appender, "Too many appends for chunk");
+
+	// Finish and flush the row.
+	REQUIRE(duckdb_appender_end_row(appender) == DuckDBSuccess);
+	REQUIRE(duckdb_appender_flush(appender) == DuckDBSuccess);
+
+	// Next row.
+	REQUIRE(duckdb_appender_begin_row(appender) == DuckDBSuccess);
+	REQUIRE(duckdb_append_int32(appender, 42) == DuckDBSuccess);
+	REQUIRE(duckdb_append_double(appender, 4.2) == DuckDBSuccess);
+
+	// Missing column.
+	REQUIRE(duckdb_appender_end_row(appender) == DuckDBError);
 	REQUIRE(duckdb_appender_error(appender) != nullptr);
+	TestAppenderError(appender, "Call to EndRow before all rows have been appended to");
 
-	status = duckdb_append_varchar(appender, "Hello, World");
-	REQUIRE(status == DuckDBSuccess);
+	// Append the missing column.
+	REQUIRE(duckdb_append_varchar(appender, "Hello, World") == DuckDBSuccess);
 
 	// out of cols here
 	status = duckdb_append_int32(appender, 42);

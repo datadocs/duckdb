@@ -33,7 +33,10 @@ data_ptr_t JemallocExtension::Reallocate(PrivateAllocatorData *private_data, dat
 
 static void JemallocCTL(const char *name, void *old_ptr, size_t *old_len, void *new_ptr, size_t new_len) {
 	if (duckdb_jemalloc::je_mallctl(name, old_ptr, old_len, new_ptr, new_len) != 0) {
+#ifdef DEBUG
+		// We only want to throw an exception here when debugging
 		throw InternalException("je_mallctl failed for setting \"%s\"", name);
+#endif
 	}
 }
 
@@ -69,6 +72,26 @@ void JemallocExtension::ThreadFlush(idx_t threshold) {
 
 	// Reset the peak after resetting
 	SetJemallocCTL("thread.peak.reset");
+}
+
+void JemallocExtension::FlushAll() {
+	// Flush thread-local cache
+	SetJemallocCTL("thread.tcache.flush");
+
+	// Flush all arenas
+	const auto purge_arena = StringUtil::Format("arena.%llu.purge", MALLCTL_ARENAS_ALL);
+	SetJemallocCTL(purge_arena.c_str());
+
+	// Reset the peak after resetting
+	SetJemallocCTL("thread.peak.reset");
+}
+
+std::string JemallocExtension::Version() const {
+#ifdef EXT_VERSION_JEMALLOC
+	return EXT_VERSION_JEMALLOC;
+#else
+	return "";
+#endif
 }
 
 } // namespace duckdb

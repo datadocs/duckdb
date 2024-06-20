@@ -105,9 +105,8 @@ RelationStats RelationStatisticsHelper::ExtractGetStats(LogicalGet &get, ClientC
 	if (!get.table_filters.filters.empty()) {
 		column_statistics = nullptr;
 		for (auto &it : get.table_filters.filters) {
-			if (get.bind_data && get.function.name.compare("seq_scan") == 0) {
-				auto &table_scan_bind_data = get.bind_data->Cast<TableScanBindData>();
-				column_statistics = get.function.statistics(context, &table_scan_bind_data, it.first);
+			if (get.bind_data && get.function.statistics) {
+				column_statistics = get.function.statistics(context, get.bind_data.get(), it.first);
 			}
 
 			if (column_statistics && it.second->filter_type == TableFilterType::CONJUNCTION_AND) {
@@ -121,8 +120,8 @@ RelationStats RelationStatisticsHelper::ExtractGetStats(LogicalGet &get, ClientC
 		// and there are other table filters (i.e cost > 50), use default selectivity.
 		bool has_equality_filter = (cardinality_after_filters != base_table_cardinality);
 		if (!has_equality_filter && !get.table_filters.filters.empty()) {
-			cardinality_after_filters =
-			    MaxValue<idx_t>(base_table_cardinality * RelationStatisticsHelper::DEFAULT_SELECTIVITY, 1);
+			cardinality_after_filters = MaxValue<idx_t>(
+			    NumericCast<idx_t>(base_table_cardinality * RelationStatisticsHelper::DEFAULT_SELECTIVITY), 1U);
 		}
 		if (base_table_cardinality == 0) {
 			cardinality_after_filters = 0;
@@ -345,7 +344,7 @@ RelationStats RelationStatisticsHelper::ExtractAggregationStats(LogicalAggregate
 		// most likely we are running on parquet files. Therefore we divide by 2.
 		new_card = (double)child_stats.cardinality / 2;
 	}
-	stats.cardinality = new_card;
+	stats.cardinality = NumericCast<idx_t>(new_card);
 	stats.column_names = child_stats.column_names;
 	stats.stats_initialized = true;
 	auto num_child_columns = aggr.GetColumnBindings().size();

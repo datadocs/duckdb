@@ -12,12 +12,15 @@
 #include "row_number_column_reader.hpp"
 #include "snappy.h"
 #include "string_column_reader.hpp"
+#include "null_column_reader.hpp"
 #include "struct_column_reader.hpp"
 #include "templated_column_reader.hpp"
 #include "utf8proc_wrapper.hpp"
 #include "zstd.h"
+#include "lz4.hpp"
 
 #ifndef DUCKDB_AMALGAMATION
+#include "duckdb/common/helper.hpp"
 #include "duckdb/common/types/bit.hpp"
 #include "duckdb/common/types/blob.hpp"
 #endif
@@ -302,7 +305,7 @@ void ColumnReader::PreparePageV2(PageHeader &page_hdr) {
 
 void ColumnReader::AllocateBlock(idx_t size) {
 	if (!block) {
-		block = make_shared<ResizeableBuffer>(GetAllocator(), size);
+		block = make_shared_ptr<ResizeableBuffer>(GetAllocator(), size);
 	} else {
 		block->resize(GetAllocator(), size);
 	}
@@ -339,6 +342,13 @@ void ColumnReader::DecompressInternal(CompressionCodec::type codec, const_data_p
 		s.Decompress(const_char_ptr_cast(src), src_size, char_ptr_cast(dst), dst_size);
 		break;
 	}
+	case CompressionCodec::LZ4_RAW: {
+		auto res = duckdb_lz4::LZ4_decompress_safe(const_char_ptr_cast(src), char_ptr_cast(dst), src_size, dst_size);
+		if (res != NumericCast<int>(dst_size)) {
+			throw std::runtime_error("LZ4 decompression failure");
+		}
+		break;
+	}
 	case CompressionCodec::SNAPPY: {
 		{
 			size_t uncompressed_size = 0;
@@ -346,7 +356,7 @@ void ColumnReader::DecompressInternal(CompressionCodec::type codec, const_data_p
 			if (!res) {
 				throw std::runtime_error("Snappy decompression failure");
 			}
-			if (uncompressed_size != (size_t)dst_size) {
+			if (uncompressed_size != dst_size) {
 				throw std::runtime_error("Snappy decompression failure: Uncompressed data size mismatch");
 			}
 		}
@@ -358,16 +368,17 @@ void ColumnReader::DecompressInternal(CompressionCodec::type codec, const_data_p
 	}
 	case CompressionCodec::ZSTD: {
 		auto res = duckdb_zstd::ZSTD_decompress(dst, dst_size, src, src_size);
-		if (duckdb_zstd::ZSTD_isError(res) || res != (size_t)dst_size) {
+		if (duckdb_zstd::ZSTD_isError(res) || res != dst_size) {
 			throw std::runtime_error("ZSTD Decompression failure");
 		}
 		break;
 	}
+
 	default: {
 		std::stringstream codec_name;
 		codec_name << codec;
 		throw std::runtime_error("Unsupported compression codec \"" + codec_name.str() +
-		                         "\". Supported options are uncompressed, gzip, snappy or zstd");
+		                         "\". Supported options are uncompressed, gzip, lz4_raw, snappy or zstd");
 	}
 	}
 }
@@ -506,7 +517,7 @@ idx_t ColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, data_ptr
 			        result);
 		} else if (dbp_decoder) {
 			// TODO keep this in the state
-			auto read_buf = make_shared<ResizeableBuffer>();
+			auto read_buf = make_shared_ptr<ResizeableBuffer>();
 
 			switch (schema.type) {
 			case duckdb_parquet::format::Type::INT32:
@@ -527,7 +538,7 @@ idx_t ColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, data_ptr
 		} else if (rle_decoder) {
 			// RLE encoding for boolean
 			D_ASSERT(type.id() == LogicalTypeId::BOOLEAN);
-			auto read_buf = make_shared<ResizeableBuffer>();
+			auto read_buf = make_shared_ptr<ResizeableBuffer>();
 			read_buf->resize(reader.allocator, sizeof(bool) * (read_now - null_count));
 			rle_decoder->GetBatch<uint8_t>(read_buf->ptr, read_now - null_count);
 			PlainTemplated<bool, TemplatedParquetValueConversion<bool>>(read_buf, define_out, read_now, filter,
@@ -536,7 +547,7 @@ idx_t ColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, data_ptr
 			// DELTA_BYTE_ARRAY or DELTA_LENGTH_BYTE_ARRAY
 			DeltaByteArray(define_out, read_now, filter, result_offset, result);
 		} else if (bss_decoder) {
-			auto read_buf = make_shared<ResizeableBuffer>();
+			auto read_buf = make_shared_ptr<ResizeableBuffer>();
 
 			switch (schema.type) {
 			case duckdb_parquet::format::Type::FLOAT:
@@ -652,7 +663,7 @@ void StringColumnReader::Dictionary(shared_ptr<ResizeableBuffer> data, idx_t num
 static shared_ptr<ResizeableBuffer> ReadDbpData(Allocator &allocator, ResizeableBuffer &buffer, idx_t &value_count) {
 	auto decoder = make_uniq<DbpDecoder>(buffer.ptr, buffer.len);
 	value_count = decoder->TotalValues();
-	auto result = make_shared<ResizeableBuffer>();
+	auto result = make_shared_ptr<ResizeableBuffer>();
 	result->resize(allocator, sizeof(uint32_t) * value_count);
 	decoder->GetBatch<uint32_t>(result->ptr, value_count);
 	decoder->Finalize();
@@ -1004,7 +1015,23 @@ idx_t CastColumnReader::Read(uint64_t num_values, parquet_filter_t &filter, data
 			}
 		}
 	}
-	VectorOperations::DefaultCast(intermediate_vector, result, amount);
+	string error_message;
+	bool all_succeeded = VectorOperations::DefaultTryCast(intermediate_vector, result, amount, &error_message);
+	if (!all_succeeded) {
+		string extended_error;
+		extended_error =
+		    StringUtil::Format("In file \"%s\" the column \"%s\" has type %s, but we are trying to read it as type %s.",
+		                       reader.file_name, schema.name, intermediate_vector.GetType(), result.GetType());
+		extended_error += "\nThis can happen when reading multiple Parquet files. The schema information is taken from "
+		                  "the first Parquet file by default. Possible solutions:\n";
+		extended_error += "* Enable the union_by_name=True option to combine the schema of all Parquet files "
+		                  "(duckdb.org/docs/data/multiple_files/combining_schemas)\n";
+		extended_error += "* Use a COPY statement to automatically derive types from an existing table.";
+		throw ConversionException(
+		    "In Parquet reader of file \"%s\": failed to cast column \"%s\" from type %s to %s: %s\n\n%s",
+		    reader.file_name, schema.name, intermediate_vector.GetType(), result.GetType(), error_message,
+		    extended_error);
+	}
 	return amount;
 }
 
@@ -1508,6 +1535,8 @@ unique_ptr<ColumnReader> ColumnReader::CreateReader(ParquetReader &reader, const
 		return make_uniq<UUIDColumnReader>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
 	case LogicalTypeId::INTERVAL:
 		return make_uniq<IntervalColumnReader>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
+	case LogicalTypeId::SQLNULL:
+		return make_uniq<NullColumnReader>(reader, type_p, schema_p, file_idx_p, max_define, max_repeat);
 	default:
 		break;
 	}

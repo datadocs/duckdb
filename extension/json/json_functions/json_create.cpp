@@ -61,6 +61,9 @@ static LogicalType GetJSONType(StructNames &const_struct_names, const LogicalTyp
 	// The nested types need to conform as well
 	case LogicalTypeId::LIST:
 		return LogicalType::LIST(GetJSONType(const_struct_names, ListType::GetChildType(type)));
+	case LogicalTypeId::ARRAY:
+		return LogicalType::ARRAY(GetJSONType(const_struct_names, ArrayType::GetChildType(type)),
+		                          ArrayType::GetSize(type));
 	// Struct and MAP are treated as JSON values
 	case LogicalTypeId::STRUCT: {
 		child_list_t<LogicalType> child_types;
@@ -310,8 +313,10 @@ static void CreateValuesMap(const StructNames &names, yyjson_mut_doc *doc, yyjso
 	// Create nested keys
 	auto &map_key_v = MapVector::GetKeys(value_v);
 	auto map_key_count = ListVector::GetListSize(value_v);
+	Vector map_keys_string(LogicalType::VARCHAR, map_key_count);
+	VectorOperations::DefaultCast(map_key_v, map_keys_string, map_key_count);
 	auto nested_keys = JSONCommon::AllocateArray<yyjson_mut_val *>(doc, map_key_count);
-	TemplatedCreateValues<string_t, string_t>(doc, nested_keys, map_key_v, map_key_count);
+	TemplatedCreateValues<string_t, string_t>(doc, nested_keys, map_keys_string, map_key_count);
 	// Create nested values
 	auto &map_val_v = MapVector::GetValues(value_v);
 	auto map_val_count = ListVector::GetListSize(value_v);
@@ -435,6 +440,9 @@ static void CreateValuesList(const StructNames &names, yyjson_mut_doc *doc, yyjs
 
 static void CreateValuesArray(const StructNames &names, yyjson_mut_doc *doc, yyjson_mut_val *vals[], Vector &value_v,
                               idx_t count) {
+
+	value_v.Flatten(count);
+
 	// Initialize array for the nested values
 	auto &child_v = ArrayVector::GetEntry(value_v);
 	auto array_size = ArrayType::GetSize(value_v.GetType());

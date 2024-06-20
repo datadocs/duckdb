@@ -19,14 +19,15 @@ struct hash<duckdb::interval_t> {
 	inline size_t operator()(const duckdb::interval_t &val) const {
 		int64_t months, days, micros;
 		val.Normalize(months, days, micros);
-		return hash<int32_t> {}(days) ^ hash<int32_t> {}(months) ^ hash<int64_t> {}(micros);
+		return hash<int32_t> {}(duckdb::UnsafeNumericCast<int32_t>(days)) ^
+		       hash<int32_t> {}(duckdb::UnsafeNumericCast<int32_t>(months)) ^ hash<int64_t> {}(micros);
 	}
 };
 
 template <>
 struct hash<duckdb::hugeint_t> {
 	inline size_t operator()(const duckdb::hugeint_t &val) const {
-		return hash<int64_t> {}(val.upper) ^ hash<int64_t> {}(val.lower);
+		return hash<int64_t> {}(val.upper) ^ hash<uint64_t> {}(val.lower);
 	}
 };
 
@@ -101,7 +102,7 @@ struct ModeState {
 	void ModeRm(const KEY_TYPE &key, idx_t frame) {
 		auto &attr = (*frequency_map)[key];
 		auto old_count = attr.count;
-		nonzero -= int(old_count == 1);
+		nonzero -= size_t(old_count == 1);
 
 		attr.count -= 1;
 		if (count == old_count && key == *mode) {
@@ -261,8 +262,8 @@ struct ModeFunction {
 		if (!state.frequency_map) {
 			state.frequency_map = new typename STATE::Counts;
 		}
-		const double tau = .25;
-		if (state.nonzero <= tau * state.frequency_map->size() || prevs.back().end <= frames.front().start ||
+		const size_t tau_inverse = 4; // tau==0.25
+		if (state.nonzero <= (state.frequency_map->size() / tau_inverse) || prevs.back().end <= frames.front().start ||
 		    frames.back().end <= prevs.front().start) {
 			state.Reset();
 			// for f ∈ F do

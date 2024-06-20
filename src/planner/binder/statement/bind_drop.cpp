@@ -14,6 +14,7 @@ namespace duckdb {
 BoundStatement Binder::Bind(DropStatement &stmt) {
 	BoundStatement result;
 
+	auto &properties = GetStatementProperties();
 	switch (stmt.info->type) {
 	case CatalogType::PREPARED_STATEMENT:
 		// dropping prepared statements is always possible
@@ -35,7 +36,7 @@ BoundStatement Binder::Bind(DropStatement &stmt) {
 	case CatalogType::TYPE_ENTRY: {
 		BindSchemaOrCatalog(stmt.info->catalog, stmt.info->schema);
 		auto entry = Catalog::GetEntry(context, stmt.info->type, stmt.info->catalog, stmt.info->schema, stmt.info->name,
-		                               OnEntryNotFound::RETURN_NULL);
+		                               stmt.info->if_not_found);
 		if (!entry) {
 			break;
 		}
@@ -61,6 +62,7 @@ BoundStatement Binder::Bind(DropStatement &stmt) {
 	result.plan = make_uniq<LogicalSimple>(LogicalOperatorType::LOGICAL_DROP, std::move(stmt.info));
 	result.names = {"Success"};
 	result.types = {LogicalType::BOOLEAN};
+
 	properties.allow_stream_result = false;
 	properties.return_type = StatementReturnType::NOTHING;
 	return result;
