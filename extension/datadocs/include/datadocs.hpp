@@ -15,10 +15,11 @@ constexpr int dd_numeric_scale = 9;
  * @brief name of optional arguments for function `comparison_any`, `any_in_array` and `sort_hash`
  *
  */
-enum class ComparisonArgumentType : uint8_t { ci, keys_ci };
+enum class ComparisonArgumentType : uint8_t { ci, keys_ci, ansi_null };
 
 static string ci_str = "ci";
 static string keys_ci_str = "keys_ci";
+static string ansi_null_str = "ansi_nulls";
 
 /**
  * @brief Default value of optional arguments
@@ -27,6 +28,7 @@ static string keys_ci_str = "keys_ci";
  */
 static bool ci_default_value = true;
 static bool keys_ci_default_value = true;
+static bool ansi_nulls_default_value = false;
 
 /**
  * @brief Comparison type, ranking types for compare between types in case values couldn't convertible
@@ -54,6 +56,7 @@ enum class ComparisonType : uint8_t {
  * 1: bigger than
  *
  */
+static int COMPARISON_RS_IS_NULL = -2;
 static int COMPARISON_RS_EQUAL = 0;
 static int COMPARISON_RS_LESS = -1;
 static int COMPARISON_RS_BIGGER = 1;
