@@ -290,7 +290,7 @@ Value GetDecayJsonValue(Value v, yyjson_alc *alc) {
  * @param keys_ci
  * @return int
  */
-static int CompareAnyValue(Value v1, Value v2, bool ci, bool keys_ci) {
+static int CompareAnyValue(Value v1, Value v2, bool ci, bool keys_ci, bool ansi_nulls) {
 	auto type1 = v1.type();
 	auto type2 = v2.type();
 	JSONAllocator alc {Allocator::DefaultAllocator()};
@@ -308,7 +308,7 @@ static int CompareAnyValue(Value v1, Value v2, bool ci, bool keys_ci) {
 		} else if (type2 == DDJsonType) {
 			new_v2 = GetDecayJsonValue(v2, alc.GetYYAlc());
 		}
-		return CompareAnyValue(new_v1, new_v2, ci, keys_ci);
+		return CompareAnyValue(new_v1, new_v2, ci, keys_ci, ansi_nulls);
 	} else if (IsNestedType(type1) && IsNestedType(type2)) {
 		// Handle for one of two value is nested type
 		if (type1.id() != type2.id()) {
@@ -324,7 +324,7 @@ static int CompareAnyValue(Value v1, Value v2, bool ci, bool keys_ci) {
 				auto minsize = std::min(values1.size(), values2.size());
 				auto compare_value = 0;
 				for (idx_t i = 0; i < minsize; i++) {
-					compare_value = CompareAnyValue(values1[i], values2[i], ci, keys_ci);
+					compare_value = CompareAnyValue(values1[i], values2[i], ci, keys_ci, ansi_nulls);
 					if (compare_value != COMPARISON_RS_EQUAL) {
 						break;
 					}
@@ -384,7 +384,7 @@ static int CompareAnyValue(Value v1, Value v2, bool ci, bool keys_ci) {
 						return key1 > key2 ? COMPARISON_RS_BIGGER : COMPARISON_RS_LESS;
 					}
 					compare_value =
-					    CompareAnyValue(values1[key_idx_map1[key1]], values2[key_idx_map2[key2]], ci, keys_ci);
+					    CompareAnyValue(values1[key_idx_map1[key1]], values2[key_idx_map2[key2]], ci, keys_ci, ansi_nulls);
 					if (compare_value != COMPARISON_RS_EQUAL) {
 						break;
 					}
@@ -404,6 +404,7 @@ static int CompareAnyValue(Value v1, Value v2, bool ci, bool keys_ci) {
 		Value new_v2 = v2;
 		bool v1_isnull = v1.IsNull();
 		bool v2_isnull = v2.IsNull();
+		if (ansi_nulls && (v1_isnull || v2_isnull)) return COMPARISON_RS_IS_NULL;
 		if (v1_isnull && v2_isnull) {
 			return COMPARISON_RS_EQUAL;
 		} else if (v1_isnull || v2_isnull) {
@@ -423,7 +424,7 @@ static int CompareAnyValue(Value v1, Value v2, bool ci, bool keys_ci) {
 		}
 		return CompareType(type1, type2);
 	}
-	return 1;
+	return COMPARISON_RS_BIGGER;
 }
 
 /**
@@ -452,7 +453,7 @@ struct CompareAny {
  * @param count
  */
 template <class T, class OP>
-static inline void TemplatedCompareAnyExecute(Vector &left, Vector &right, Vector &result, idx_t count) {
+static inline void TemplatedCompareAnyExecute(Vector &left, Vector &right, Vector &result, idx_t count, bool ansi_nulls) {
 	auto ldata = FlatVector::GetData<T>(left);
 	auto rdata = FlatVector::GetData<T>(right);
 	auto left_vector_type = left.GetVectorType();
@@ -465,6 +466,7 @@ static inline void TemplatedCompareAnyExecute(Vector &left, Vector &right, Vecto
 	right.ToUnifiedFormat(count, vdata2);
 	result.SetVectorType(VectorType::FLAT_VECTOR);
 	auto result_data = FlatVector::GetData<int>(result);
+	auto &result_validity = FlatVector::Validity(result);
 	auto left_valid = LEFT_CONSTANT && !ConstantVector::IsNull(left);
 	auto right_valid = RIGHT_CONSTANT && !ConstantVector::IsNull(right);
 
@@ -473,6 +475,10 @@ static inline void TemplatedCompareAnyExecute(Vector &left, Vector &right, Vecto
 		auto idx2 = vdata2.sel->get_index(i);
 		bool v1_valid = LEFT_CONSTANT ? left_valid : vdata1.validity.RowIsValid(idx1);
 		bool v2_valid = RIGHT_CONSTANT ? right_valid : vdata2.validity.RowIsValid(idx2);
+		if (ansi_nulls && (!v1_valid || !v2_valid)) {
+			result_validity.SetInvalid(i);
+			continue;
+		}
 		if (v1_valid && v2_valid) {
 			auto lentry = ldata[LEFT_CONSTANT ? 0 : idx1];
 			auto rentry = rdata[RIGHT_CONSTANT ? 0 : idx2];
@@ -493,47 +499,47 @@ static inline void TemplatedCompareAnyExecute(Vector &left, Vector &right, Vecto
  * @param result
  * @param count
  */
-static void CompareAnyBaseVectors(Vector &left, Vector &right, Vector &result, idx_t count) {
+static void CompareAnyBaseVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ansi_nulls) {
 	switch (left.GetType().InternalType()) {
 	case PhysicalType::BOOL:
 	case PhysicalType::INT8:
-		TemplatedCompareAnyExecute<int8_t, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<int8_t, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	case PhysicalType::INT16:
-		TemplatedCompareAnyExecute<int16_t, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<int16_t, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	case PhysicalType::INT32:
-		TemplatedCompareAnyExecute<int32_t, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<int32_t, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	case PhysicalType::INT64:
-		TemplatedCompareAnyExecute<int64_t, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<int64_t, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	case PhysicalType::UINT8:
-		TemplatedCompareAnyExecute<uint8_t, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<uint8_t, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	case PhysicalType::UINT16:
-		TemplatedCompareAnyExecute<uint16_t, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<uint16_t, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	case PhysicalType::UINT32:
-		TemplatedCompareAnyExecute<uint32_t, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<uint32_t, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	case PhysicalType::UINT64:
-		TemplatedCompareAnyExecute<uint64_t, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<uint64_t, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	case PhysicalType::INT128:
-		TemplatedCompareAnyExecute<hugeint_t, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<hugeint_t, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	case PhysicalType::FLOAT:
-		TemplatedCompareAnyExecute<float, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<float, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	case PhysicalType::DOUBLE:
-		TemplatedCompareAnyExecute<double, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<double, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	case PhysicalType::INTERVAL:
-		TemplatedCompareAnyExecute<interval_t, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<interval_t, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	case PhysicalType::VARCHAR:
-		TemplatedCompareAnyExecute<string_t, CompareAny>(left, right, result, count);
+		TemplatedCompareAnyExecute<string_t, CompareAny>(left, right, result, count, ansi_nulls);
 		break;
 	default:
 		throw InternalException("Invalid type for comparison");
@@ -550,11 +556,12 @@ static void CompareAnyBaseVectors(Vector &left, Vector &right, Vector &result, i
  * @param ci
  * @param keys_ci
  */
-static void CompareAnyVectorEachValue(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci) {
+static void CompareAnyVectorEachValue(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci, bool ansi_nulls) {
 	UnifiedVectorFormat vdata1, vdata2;
 	left.ToUnifiedFormat(count, vdata1);
 	right.ToUnifiedFormat(count, vdata2);
 	auto result_data = FlatVector::GetData<int>(result);
+	auto &result_validity = FlatVector::Validity(result);
 	auto left_type = left.GetType();
 	auto right_type = right.GetType();
 	for (idx_t i = 0; i < count; i++) {
@@ -562,9 +569,18 @@ static void CompareAnyVectorEachValue(Vector &left, Vector &right, Vector &resul
 		auto idx2 = vdata2.sel->get_index(i);
 		bool v1_valid = vdata1.validity.RowIsValid(idx1);
 		bool v2_valid = vdata2.validity.RowIsValid(idx2);
+		if (ansi_nulls && (!v1_valid || !v2_valid)) {
+			result_validity.SetInvalid(i);
+			continue;
+		}
 		if ((v1_valid && v2_valid) || (v1_valid && IsDecayableType(left_type)) ||
 		    (v2_valid && IsDecayableType(right_type))) {
-			result_data[i] = CompareAnyValue(left.GetValue(idx1), right.GetValue(idx2), ci, keys_ci);
+			auto compare_value = CompareAnyValue(left.GetValue(idx1), right.GetValue(idx2), ci, keys_ci, ansi_nulls);
+			if (ansi_nulls && compare_value == COMPARISON_RS_IS_NULL) {
+				result_validity.SetInvalid(i);
+				continue;
+			}
+			result_data[i] = compare_value;
 		} else if (!v1_valid && !v2_valid) {
 			result_data[i] = COMPARISON_RS_EQUAL;
 		} else {
@@ -581,19 +597,24 @@ static void CompareAnyVectorEachValue(Vector &left, Vector &right, Vector &resul
  * @param result
  * @param count
  */
-static void CompareAnyVectorsType(Vector &left, Vector &right, Vector &result, idx_t count) {
+static void CompareAnyVectorsType(Vector &left, Vector &right, Vector &result, idx_t count, bool ansi_nulls) {
 	auto type1 = left.GetType();
 	auto type2 = right.GetType();
 	UnifiedVectorFormat vdata1, vdata2;
 	left.ToUnifiedFormat(count, vdata1);
 	right.ToUnifiedFormat(count, vdata2);
 	auto result_data = FlatVector::GetData<int>(result);
+	auto &result_validity = FlatVector::Validity(result);
 	auto type_compare = CompareType(type1, type2);
 	for (idx_t i = 0; i < count; i++) {
 		auto idx1 = vdata1.sel->get_index(i);
 		auto idx2 = vdata2.sel->get_index(i);
 		bool v1_valid = vdata1.validity.RowIsValid(idx1);
 		bool v2_valid = vdata2.validity.RowIsValid(idx2);
+		if (ansi_nulls && (!v1_valid || !v2_valid)) {
+			result_validity.SetInvalid(i);
+			continue;
+		}
 		if (v1_valid && v2_valid) {
 			result_data[i] = type_compare;
 		} else if (!v1_valid && !v2_valid) {
@@ -620,13 +641,13 @@ static void CompareAnyVectorsType(Vector &left, Vector &right, Vector &result, i
  * @param ci
  * @param keys_ci
  */
-static void CompareAnyNestedVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci) {
+static void CompareAnyNestedVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci, bool ansi_nulls) {
 	auto type1 = left.GetType();
 	auto type2 = right.GetType();
 	if (type1.id() != type2.id()) {
-		CompareAnyVectorsType(left, right, result, count);
+		CompareAnyVectorsType(left, right, result, count, ansi_nulls);
 	} else if (type1.id() == LogicalTypeId::LIST) {
-		CompareAnyVectorEachValue(left, right, result, count, ci, keys_ci);
+		CompareAnyVectorEachValue(left, right, result, count, ci, keys_ci, ansi_nulls);
 	} else if (type1.id() == LogicalTypeId::STRUCT) {
 		child_list_t<LogicalType> child_types1 = StructType::GetChildTypes(type1);
 		if (keys_ci) {
@@ -670,6 +691,7 @@ static void CompareAnyNestedVectors(Vector &left, Vector &right, Vector &result,
 		left.ToUnifiedFormat(count, vdata1);
 		right.ToUnifiedFormat(count, vdata2);
 		auto result_data = FlatVector::GetData<int>(result);
+		auto &result_validity = FlatVector::Validity(result);
 		auto &left_children_vec = StructVector::GetEntries(left);
 		auto &right_children_vec = StructVector::GetEntries(right);
 		for (idx_t i = 0; i < count; i++) {
@@ -687,7 +709,11 @@ static void CompareAnyNestedVectors(Vector &left, Vector &right, Vector &result,
 					}
 					result_data[i] =
 					    CompareAnyValue(left_children_vec[key_idx_map1[key1]]->GetValue(idx1),
-					                    right_children_vec[key_idx_map2[key2]]->GetValue(idx2), ci, keys_ci);
+					                    right_children_vec[key_idx_map2[key2]]->GetValue(idx2), ci, keys_ci, ansi_nulls);
+					if (ansi_nulls && result_data[i] == COMPARISON_RS_IS_NULL) {
+						result_validity.SetInvalid(i);
+						break;
+					}
 					if (result_data[i] != COMPARISON_RS_EQUAL) {
 						break;
 					}
@@ -722,29 +748,29 @@ static void CompareAnyNestedVectors(Vector &left, Vector &right, Vector &result,
  * @param ci
  * @param keys_ci
  */
-static void CompareAnyVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci) {
+static void CompareAnyVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci, bool ansi_nulls) {
 	auto type1 = left.GetType();
 	auto type2 = right.GetType();
 	if (left.GetVectorType() == VectorType::CONSTANT_VECTOR && right.GetVectorType() == VectorType::CONSTANT_VECTOR) {
-		CompareAnyVectorEachValue(left, right, result, count, ci, keys_ci);
+		CompareAnyVectorEachValue(left, right, result, count, ci, keys_ci, ansi_nulls);
 	} else if (IsDecayableType(type1) || IsDecayableType(type2)) {
 		// handle for Decay type
-		CompareAnyVectorEachValue(left, right, result, count, ci, keys_ci);
+		CompareAnyVectorEachValue(left, right, result, count, ci, keys_ci, ansi_nulls);
 	} else if (IsNestedType(type1) && IsNestedType(type2)) {
 		// handle for nested type
-		CompareAnyNestedVectors(left, right, result, count, ci, keys_ci);
+		CompareAnyNestedVectors(left, right, result, count, ci, keys_ci, ansi_nulls);
 	} else {
 		// handle for base type
 		if ((type1 == type2) || (TypeIncludeDate(type1) && TypeIncludeDate(type2)) ||
 		    (type1.IsNumeric() && type2.IsNumeric())) {
 			if (type1 == type2) {
-				CompareAnyBaseVectors(left, right, result, count);
+				CompareAnyBaseVectors(left, right, result, count, ansi_nulls);
 			} else {
-				CompareAnyVectorEachValue(left, right, result, count, ci, keys_ci);
+				CompareAnyVectorEachValue(left, right, result, count, ci, keys_ci, ansi_nulls);
 			}
 		} else {
 			// Compare Type
-			CompareAnyVectorsType(left, right, result, count);
+			CompareAnyVectorsType(left, right, result, count, ansi_nulls);
 		}
 	}
 }
@@ -762,8 +788,10 @@ static void CompareAnyFunction(DataChunk &args, ExpressionState &state, Vector &
 	auto second_operand = args.data[1];
 	auto ci_vec = args.data[2];
 	auto keys_ci_vec = args.data[3];
+	auto ansi_nulls_vec = args.data[4];
 	D_ASSERT(ci_vec.GetType() == LogicalType::BOOLEAN);
 	D_ASSERT(keys_ci_vec.GetType() == LogicalType::BOOLEAN);
+	D_ASSERT(ansi_nulls_vec.GetType() == LogicalType::BOOLEAN);
 	auto count = args.size();
 
 	if (ci_vec.GetVectorType() != VectorType::CONSTANT_VECTOR ||
@@ -772,18 +800,21 @@ static void CompareAnyFunction(DataChunk &args, ExpressionState &state, Vector &
 		return;
 	}
 
-	UnifiedVectorFormat vdata3, vdata4;
+	UnifiedVectorFormat vdata3, vdata4, vdata5;
 	ci_vec.ToUnifiedFormat(count, vdata3);
 	keys_ci_vec.ToUnifiedFormat(count, vdata4);
+	ansi_nulls_vec.ToUnifiedFormat(count, vdata5);
 
 	bool ci = ci_default_value;
 	bool keys_ci = keys_ci_default_value;
+	bool ansi_nulls = ansi_nulls_default_value;
 	if (count > 0) {
 		ci = vdata3.validity.RowIsValid(0) ? ci_vec.GetValue(0).GetValue<bool>() : ci_default_value;
 		keys_ci = vdata4.validity.RowIsValid(0) ? keys_ci_vec.GetValue(0).GetValue<bool>() : keys_ci_default_value;
+		ansi_nulls = vdata5.validity.RowIsValid(0) ? ansi_nulls_vec.GetValue(0).GetValue<bool>() : ansi_nulls_default_value;
 	}
 
-	CompareAnyVectors(first_operand, second_operand, result, count, ci, keys_ci);
+	CompareAnyVectors(first_operand, second_operand, result, count, ci, keys_ci, ansi_nulls);
 
 	if (first_operand.GetVectorType() == VectorType::CONSTANT_VECTOR &&
 	    second_operand.GetVectorType() == VectorType::CONSTANT_VECTOR) {
@@ -818,7 +849,7 @@ static void AnyInArrayVectorEachValue(Vector &left, Vector &right, Vector &resul
 			auto children_vals = ListValue::GetChildren(right_val);
 			bool in_array = false;
 			for (idx_t i = 0; i < children_vals.size(); i++) {
-				in_array = CompareAnyValue(left_val, children_vals[i], ci, keys_ci) == 0;
+				in_array = CompareAnyValue(left_val, children_vals[i], ci, keys_ci, false) == 0;
 				if (in_array) {
 					break;
 				}
@@ -1189,7 +1220,7 @@ static bool ComparisonBind(ClientContext &context, vector<unique_ptr<Expression>
 		throw Exception(ExceptionType::INVALID, "Can't compare nothing");
 		return false;
 	}
-	if (arguments.size() < 2 || arguments.size() > 4) {
+	if (arguments.size() < 2 || arguments.size() > 5) {
 		throw Exception(ExceptionType::INVALID, "Can't compare invalid operands");
 		return false;
 	}
@@ -1203,22 +1234,25 @@ static bool ComparisonBind(ClientContext &context, vector<unique_ptr<Expression>
 			arguments_maps.insert(std::pair<ComparisonArgumentType, idx_t>(ComparisonArgumentType::ci, i));
 		} else if (alias == keys_ci_str) {
 			arguments_maps.insert(std::pair<ComparisonArgumentType, idx_t>(ComparisonArgumentType::keys_ci, i));
+		} else if (alias == ansi_null_str) {
+			arguments_maps.insert(std::pair<ComparisonArgumentType, idx_t>(ComparisonArgumentType::ansi_null, i));
 		} else {
 			throw Exception(ExceptionType::INVALID, "Argument key is invalid key");
 			return false;
 		}
 	}
-	vector<unique_ptr<Expression>> option_arguments(2);
-	for (idx_t i = 0; i < 2; i++) {
+	vector<unique_ptr<Expression>> option_arguments(3);
+	std::vector<bool> default_value{ci_default_value, keys_ci_default_value, ansi_nulls_default_value};
+	for (idx_t i = 0; i < 3; i++) {
 		auto iter = arguments_maps.find(ComparisonArgumentType(i));
 		if (iter != arguments_maps.end()) {
 			option_arguments[i] = std::move(arguments[iter->second]);
 		} else {
-			option_arguments[i] = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+			option_arguments[i] = make_uniq<BoundConstantExpression>(Value::BOOLEAN(default_value[i]));
 		}
 	}
-	arguments.resize(4);
-	for (idx_t i = 0; i < 2; i++) {
+	arguments.resize(5);
+	for (idx_t i = 0; i < 3; i++) {
 		arguments[i + 2] = std::move(option_arguments[i]);
 	}
 
@@ -1276,7 +1310,6 @@ static unique_ptr<FunctionData> CompareAnyBind(ClientContext &context, ScalarFun
 	if (type1 != type2) {
 		if ((type1.IsNumeric() && type2.IsNumeric()) || (TypeIncludeDate(type1) && TypeIncludeDate(type2))) {
 			auto input_type = LogicalType::ForceMaxLogicalType(type1, type2);
-			;
 			arguments[0] = BoundCastExpression::AddCastToType(context, std::move(arguments[0]), input_type,
 			                                                  input_type.id() == LogicalTypeId::ENUM);
 			arguments[1] = BoundCastExpression::AddCastToType(context, std::move(arguments[1]), input_type,
