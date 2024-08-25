@@ -187,7 +187,8 @@ static const std::vector<std::string> type_index {
 	"NUMERIC",
 	"GEOGRAPHY",
 	"STRUCT",
-	"VARIANT"
+	"VARIANT",
+	"JSON"
 };
 
 template <class E>

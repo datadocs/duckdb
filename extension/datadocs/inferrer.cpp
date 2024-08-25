@@ -297,6 +297,8 @@ IngestColBase* BuildColumn(const IngestColumnDefinition &col, idx_t &cur_row) {
 		return new IngestColBLOBHex(col.name, cur_row);
 	case ColumnType::Numeric: return new IngestColNUMERIC(col.name, cur_row, col.i_digits, col.f_digits);
 	case ColumnType::Geography: return new IngestColGEO(col.name, cur_row);
+	case ColumnType::JSON: return new IngestColJSON(col.name, cur_row);
+	case ColumnType::Variant: return new IngestColVariant(col.name, cur_row);
 	default:
 		D_ASSERT(false);
 		return new IngestColBase(col.name, cur_row);
@@ -441,7 +443,7 @@ public:
 	};
 
 	bool Write(string_t v) override {
-		return dispatcher.parse_string(v.GetString(), handler.get());
+		return dispatcher.parse_string(v.GetData(), handler.get());
 	}
 
 private:
@@ -1510,11 +1512,11 @@ public:
 
 	void create_schema(IngestColumnDefinition& col) const
 	{
-		if ((m_flags & (m_flags - 1)) != 0)
-			col.column_type = ColumnType::Variant;
+		if ((m_flags & (m_flags - 1)) != 0) // more than one bit set
+			col.column_type = ColumnType::JSON;
 		else if ((m_flags & ValueArray) && (m_value_level <= 0 || !m_obj.m_children.empty() && m_value_types > 0))
 		{
-			col.column_type = ColumnType::Variant;
+			col.column_type = ColumnType::JSON;
 			col.list_levels = 1;
 		}
 		else
@@ -1636,7 +1638,7 @@ public:
 			return 0;
 		const std::string* sp = std::get_if<std::string>(&cell);
 		if (!sp || !std::regex_search(*sp, _re_is_json, std::regex_constants::match_continuous) ||
-			(m_value.m_level = 0, !m_json.parse_string(*sp, &m_value)))
+			(m_value.m_level = 0, !m_json.parse_string(sp->data(), &m_value)))
 			return m_valid = false;
 		if (m_is_geo && !std::regex_search(*sp, _re_is_geojson))
 			m_is_geo = false;
@@ -1929,7 +1931,7 @@ bool JSONParser::do_infer_schema()
 
 	JSONDispatcher json;
 	JSONInferValue value;
-	json.parse_string(sample, &value);
+	json.parse_string(sample.data(), &value);
 	return value.create_top_schema(m_schema);
 }
 
