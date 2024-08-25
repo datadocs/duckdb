@@ -51,7 +51,7 @@ public:
 	void pop() { m_top = m_value = m_stack.back(); m_stack.pop_back(); }
 	void skip() { m_value = &m_skip; }
 
-	bool parse_string(const std::string& input, JSONHandler* handler);
+	bool parse_string(const char *input, JSONHandler *handler);
 	void init(JSONHandler* root);
 
 	JSONHandler* m_value = nullptr;

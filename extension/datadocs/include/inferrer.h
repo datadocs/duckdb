@@ -29,7 +29,8 @@ enum class ColumnType : uint8_t {
 	Numeric,
 	Geography,
 	Struct,
-	Variant
+	Variant,
+	JSON
 };
 
 struct VariantCell
