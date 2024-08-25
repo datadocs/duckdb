@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "duckdb.hpp"
+#include "json_common.hpp"
 
 #include "datadocs.hpp"
 #include "vector_proxy.hpp"
@@ -226,6 +227,37 @@ public:
 		return DDGeoType;
 	};
 	bool Write(string_t v) override;
+};
+
+class IngestColJSON : public IngestColBase {
+public:
+	using IngestColBase::IngestColBase, IngestColBase::Write;
+
+	LogicalType GetType() const override {
+		return DDJsonType;
+	};
+	bool Write(string_t v) override;
+	bool Write(int64_t v) override;
+	bool Write(bool v) override;
+	bool Write(double v) override;
+	bool WriteExcelDate(double v) override;
+
+private:
+	JSONAllocator alc {Allocator::DefaultAllocator()};
+};
+
+class IngestColVariant : public IngestColBase {
+public:
+	using IngestColBase::IngestColBase, IngestColBase::Write;
+
+	LogicalType GetType() const override {
+		return DDVariantType;
+	};
+	bool Write(string_t v) override;
+	bool Write(int64_t v) override;
+	bool Write(bool v) override;
+	bool Write(double v) override;
+	bool WriteExcelDate(double v) override;
 };
 
 struct IngestColChildrenMap {

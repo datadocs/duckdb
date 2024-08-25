@@ -343,4 +343,106 @@ bool IngestColGEO::Write(string_t v) {
 	return true;
 }
 
+bool IngestColJSON::Write(string_t v) {
+	alc.Reset();
+	if (!JSONCommon::ReadDocumentUnsafe(v, JSONCommon::READ_FLAG, alc.GetYYAlc())) {
+		return false;
+	}
+	Writer().SetString(v);
+	return true;
+}
+
+bool IngestColJSON::Write(int64_t v) {
+	Writer().SetVectorString(StringCast::Operation(v, GetVector()));
+	return true;
+}
+
+bool IngestColJSON::Write(bool v) {
+	Writer().SetVectorString(StringCast::Operation(v, GetVector()));
+	return true;
+}
+
+bool IngestColJSON::Write(double v) {
+	Writer().SetVectorString(StringCast::Operation(v, GetVector()));
+	return true;
+}
+
+bool IngestColJSON::WriteExcelDate(double v) {
+	int32_t date[3], time[4];
+	idx_t date_length, year_length, time_length, length;
+	bool add_bc;
+	char micro_buffer[6];
+	bool have_date = v >= 1.0;
+	bool have_time = v != std::trunc(v);
+	if (have_date)
+	{
+		Date::Convert(date_t((int)v - 25569), date[0], date[1], date[2]);
+		length = date_length = have_time + DateToStringCast::Length(date, year_length, add_bc);
+	} else {
+		length = 0;
+	}
+	if (have_time)
+	{
+		long t = std::lround((v - int(v)) * 86400.0);
+		time[0] = t / 3600;
+		t %= 3600;
+		time[1] = t / 60;
+		time[2] = t % 60;
+		time[3] = 0;
+		time_length = TimeToStringCast::Length(time, micro_buffer);
+		length += time_length;
+	}
+	string_t &result = Writer().ReserveString(length + 2);
+	char *data = result.GetDataWriteable();
+	data[length+1] = '"';
+	*data++ = '"';
+	if (have_date) {
+		DateToStringCast::Format(data, date, year_length, add_bc);
+		data += date_length;
+		if (have_time) {
+			data[-1] = ' ';
+		}
+	}
+	if (have_time) {
+		TimeToStringCast::Format(data, time_length, time, micro_buffer);
+	}
+	result.Finalize();
+	return true;
+}
+
+bool IngestColVariant::Write(string_t v) {
+	auto writer = Writer();
+	return VariantWriteValue(writer, Value(v));
+}
+
+bool IngestColVariant::Write(int64_t v) {
+	auto writer = Writer();
+	return VariantWriteValue(writer, Value(v));
+}
+
+bool IngestColVariant::Write(bool v) {
+	auto writer = Writer();
+	return VariantWriteValue(writer, Value::BOOLEAN(v));
+}
+
+bool IngestColVariant::Write(double v) {
+	auto writer = Writer();
+	return VariantWriteValue(writer, Value(v));
+}
+
+bool IngestColVariant::WriteExcelDate(double v) {
+	bool have_date = v >= 1.0;
+	bool have_time = v != std::trunc(v);
+	Value value;
+	if (have_date && have_time) {
+		value = Value::TIMESTAMP(timestamp_t((v - 25569) * Interval::MICROS_PER_DAY));
+	} else if (have_date) {
+		value = Value::DATE(date_t((int32_t)v - 25569));
+	} else {
+		value = Value::TIME(dtime_t(v * Interval::MICROS_PER_DAY));
+	}
+	auto writer = Writer();
+	return VariantWriteValue(writer, value);
+}
+
 } // namespace duckdb
