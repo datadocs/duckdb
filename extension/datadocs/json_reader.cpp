@@ -46,12 +46,12 @@ protected:
 	const std::vector<string>& m_start_path;
 };
 
-bool JSONDispatcher::parse_string(const string& input, JSONHandler* handler)
+bool JSONDispatcher::parse_string(const char *input, JSONHandler* handler)
 {
 	m_stack.clear();
 	m_top = nullptr;
 	m_value = handler;
-	rj::StringStream ss(input.data());
+	rj::StringStream ss(input);
 	return rj::Reader().Parse(ss, *this);
 }
 
@@ -489,16 +489,12 @@ protected:
 	std::vector<char*> m_insert_pos;
 };
 
-class IngestColJSONVariant : public JSONValue, public IngestColVARCHAR {
+class IngestColJSONJSON : public JSONValue, public IngestColJSON {
 public:
-	IngestColJSONVariant(string name, idx_t &cur_row) : JSONValue(this), IngestColVARCHAR(name, cur_row), impl(this) {
+	IngestColJSONJSON(string name, idx_t &cur_row) : JSONValue(this), IngestColJSON(name, cur_row), impl(this) {
 	}
 
-	LogicalType GetType() const override {
-		return DDJsonType;
-	};
-
-	virtual bool Null() override { WriteNull(); return true; }
+	virtual bool Null() override { impl.Init(); impl.Null(); impl.Finalize(); return true; }
 	virtual bool Bool(bool b) override { impl.Init(); impl.Bool(b); impl.Finalize(); return true; }
 	virtual bool Int(int i) override { impl.Init(); impl.Int(i); impl.Finalize(); return true; }
 	virtual bool Uint(unsigned i) override { impl.Init(); impl.Uint(i); impl.Finalize(); return true; }
@@ -519,9 +515,9 @@ public:
 		return impl.StartArray(dispatcher);
 	}
 private:
-	class IngestColJSONVariantImpl : public JSONValue {
+	class IngestColJSONJSONImpl : public JSONValue {
 	public:
-		IngestColJSONVariantImpl(IngestColBase *column) : JSONValue(column), jwriter(buffer) {
+		IngestColJSONJSONImpl(IngestColBase *column) : JSONValue(column), jwriter(buffer) {
 		}
 
 		virtual bool Null() override { return jwriter.Null(); }
@@ -571,7 +567,7 @@ private:
 		rj::Writer<rj::StringBuffer> jwriter;
 	};
 
-	IngestColJSONVariantImpl impl;
+	IngestColJSONJSONImpl impl;
 };
 
 JSONValue *JSONBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row, int list_level) {
@@ -599,7 +595,8 @@ JSONValue *JSONBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row, in
 	case ColumnType::Numeric: return new JSONCol<IngestColNUMERIC>(col.name, cur_row, col.i_digits, col.f_digits);
 	case ColumnType::Geography: return new IngestColJSONGeo(col.name, cur_row);
 	case ColumnType::Struct: return new JSONStruct(col, cur_row);
-	case ColumnType::Variant: return new IngestColJSONVariant(col.name, cur_row);
+	case ColumnType::Variant: return new JSONCol<IngestColVariant>(col.name, cur_row);
+	case ColumnType::JSON: return new IngestColJSONJSON(col.name, cur_row);
 	default:
 		D_ASSERT(false);
 		return new JSONCol<IngestColBase>(col.name, cur_row);
