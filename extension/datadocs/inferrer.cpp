@@ -443,7 +443,7 @@ public:
 	};
 
 	bool Write(string_t v) override {
-		return dispatcher.parse_string(v.GetData(), handler.get());
+		return dispatcher.parse_string(v.GetString().data(), handler.get());
 	}
 
 private:
