@@ -3244,7 +3244,7 @@ static const void HandleCastFunction(DatabaseInstance &inst) {
 			target_type = LogicalType::UNION({{"any", LogicalType::ANY}});
 			break;
 		case LogicalTypeId::ARRAY:
-			target_type = LogicalType::ARRAY(LogicalType::ANY);
+			target_type = LogicalType::ARRAY(LogicalType::ANY, optional_idx());
 			break;
 		default:
 			target_type = type;
@@ -3273,7 +3273,7 @@ static const void HandleCastFunction(DatabaseInstance &inst) {
 			source_type = LogicalType::UNION({{"any", LogicalType::ANY}});
 			break;
 		case LogicalTypeId::ARRAY:
-			source_type = LogicalType::ARRAY(LogicalType::ANY);
+			source_type = LogicalType::ARRAY(LogicalType::ANY, optional_idx());
 			break;
 		default:
 			source_type = type;
