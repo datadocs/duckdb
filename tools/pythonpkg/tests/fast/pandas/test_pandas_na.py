@@ -2,6 +2,8 @@ import numpy as np
 import datetime
 import duckdb
 import pytest
+import platform
+from conftest import NumpyPandas, ArrowPandas
 
 
 def assert_nullness(items, null_indices):
@@ -12,7 +14,20 @@ def assert_nullness(items, null_indices):
             assert items[i] != None
 
 
+@pytest.mark.skipif(platform.system() == "Emscripten", reason="Pandas interaction is broken in Pyodide 3.11")
 class TestPandasNA(object):
+    @pytest.mark.parametrize('rows', [100, duckdb.__standard_vector_size__, 5000, 1000000])
+    @pytest.mark.parametrize('pd', [NumpyPandas(), ArrowPandas()])
+    def test_pandas_string_null(self, duckdb_cursor, rows, pd):
+        df: pd.DataFrame = pd.DataFrame(index=np.arange(rows))
+        df["string_column"] = pd.Series(dtype="string")
+        e_df_rel = duckdb_cursor.from_df(df)
+        assert e_df_rel.types == ['VARCHAR']
+        roundtrip = e_df_rel.df()
+        assert roundtrip['string_column'].dtype == 'object'
+        expected = pd.DataFrame({'string_column': [None for _ in range(rows)]})
+        pd.testing.assert_frame_equal(expected, roundtrip)
+
     def test_pandas_na(self, duckdb_cursor):
         pd = pytest.importorskip('pandas', minversion='1.0.0', reason='Support for pandas.NA has not been added yet')
         # DataFrame containing a single pd.NA
