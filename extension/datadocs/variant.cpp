@@ -938,6 +938,7 @@ public:
 		case YYJSON_TYPE_NUM | YYJSON_SUBTYPE_SINT:
 			res = (double)unsafe_yyjson_get_sint(val);
 			break;
+		case YYJSON_TYPE_STR | YYJSON_SUBTYPE_NOESC:
 		case YYJSON_TYPE_STR | YYJSON_SUBTYPE_NONE: {
 			const char *s = unsafe_yyjson_get_str(val);
 			if (strcmp(s, "Infinity") == 0) {
@@ -984,6 +985,7 @@ public:
 				return false;
 			}
 			break;
+		case YYJSON_TYPE_STR | YYJSON_SUBTYPE_NOESC:
 		case YYJSON_TYPE_STR | YYJSON_SUBTYPE_NONE:
 			if (!TryCastToDecimal::Operation(string_t(unsafe_yyjson_get_str(val)), res, parameters, dd_numeric_width,
 			                                 dd_numeric_scale)) {
@@ -2039,6 +2041,7 @@ static bool VariantAccessWrite(VectorWriter &result, const VectorReader &arg, yy
 	string res_type;
 	if (arg_type.substr(0, 4) == "JSON" || arg_type.substr(0, 6) == "STRUCT") {
 		switch (unsafe_yyjson_get_tag(val)) {
+		case YYJSON_TYPE_STR | YYJSON_SUBTYPE_NOESC:
 		case YYJSON_TYPE_STR | YYJSON_SUBTYPE_NONE:
 			res_type = "STRING";
 			break;
@@ -2780,6 +2783,7 @@ static bool SortHashFunc(std::string &result, LogicalType type, yyjson_val *val,
 		result = unsafe_yyjson_get_bool(val) ? "01" : "00";
 	} else if (type == LogicalType::DOUBLE || is_json && js_tag == (YYJSON_TYPE_NUM | YYJSON_SUBTYPE_REAL)) {
 		switch (js_tag) {
+		case YYJSON_TYPE_STR | YYJSON_SUBTYPE_NOESC:
 		case YYJSON_TYPE_STR | YYJSON_SUBTYPE_NONE:
 			if (string s = unsafe_yyjson_get_str(val); s == "NaN") {
 				result = '1';
