@@ -5,6 +5,8 @@
 #include <string_view>
 #include <algorithm>
 
+#include "duckdb/common/types/interval.hpp"
+
 namespace duckdb {
 
 template<class... Ts> struct overloaded : Ts... { using Ts::operator()...; };
@@ -33,7 +35,8 @@ void rtrim(std::string_view s);
 void trim(std::string& s);
 
 bool is_integer(double v);
-bool strptime(const std::string& src, const std::string& fmt, double& dt);
+bool strptime(const std::string& s_src, const std::string& s_fmt, int32_t *dt, int64_t *micros);
+bool strptime_interval(const std::string &s_src, const std::string &s_fmt, interval_t &result);
 
 }
 
