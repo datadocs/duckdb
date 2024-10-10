@@ -13,6 +13,8 @@ void string_to_variant(const char* src, int src_length, VariantCell& cell);
 
 extern const std::unordered_map<string, bool> bool_dict;
 
+bool parse_money(const char *data, size_t size, std::string &buffer);
+
 }
 
 #endif
