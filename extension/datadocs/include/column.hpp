@@ -7,6 +7,8 @@
 
 #include "datadocs.hpp"
 #include "vector_proxy.hpp"
+#include "type_conv.h"
+#include "inferrer.h"
 
 namespace duckdb {
 
@@ -41,7 +43,7 @@ public:
 
 	virtual LogicalType GetType() const {
 		return LogicalType::SQLNULL;
-	};
+	}
 	const string &GetName() const noexcept {
 		return name;
 	}
@@ -81,7 +83,7 @@ public:
 
 	LogicalType GetType() const override {
 		return LogicalType::BOOLEAN;
-	};
+	}
 	bool Write(string_t v) override;
 	bool Write(int64_t v) override;
 	bool Write(bool v) override;
@@ -93,7 +95,7 @@ public:
 
 	LogicalType GetType() const override {
 		return LogicalType::BIGINT;
-	};
+	}
 	bool Write(string_t v) override;
 	bool Write(int64_t v) override;
 	bool Write(bool v) override;
@@ -106,7 +108,7 @@ public:
 
 	LogicalType GetType() const override {
 		return LogicalType::DOUBLE;
-	};
+	}
 	bool Write(string_t v) override;
 	bool Write(int64_t v) override;
 	bool Write(bool v) override;
@@ -131,7 +133,7 @@ public:
 
 	LogicalType GetType() const override {
 		return LogicalType::DATE;
-	};
+	}
 	bool Write(string_t v) override;
 	bool WriteExcelDate(double v) override;
 };
@@ -142,7 +144,7 @@ public:
 
 	LogicalType GetType() const override {
 		return LogicalType::TIME;
-	};
+	}
 	bool Write(string_t v) override;
 	bool WriteExcelDate(double v) override;
 };
@@ -153,7 +155,7 @@ public:
 
 	LogicalType GetType() const override {
 		return LogicalType::TIMESTAMP;
-	};
+	}
 	bool Write(string_t v) override;
 	bool WriteExcelDate(double v) override;
 };
@@ -164,7 +166,18 @@ public:
 
 	LogicalType GetType() const override {
 		return LogicalType::INTERVAL;
-	};
+	}
+	bool Write(string_t v) override;
+	bool WriteExcelDate(double v) override;
+};
+
+class IngestColINTERVALFormat : public IngestColDateBase {
+public:
+	using IngestColDateBase::IngestColDateBase, IngestColDateBase::Write;
+
+	LogicalType GetType() const override {
+		return LogicalType::INTERVAL;
+	}
 	bool Write(string_t v) override;
 	bool WriteExcelDate(double v) override;
 };
@@ -175,7 +188,7 @@ public:
 
 	LogicalType GetType() const override {
 		return LogicalType::INTERVAL;
-	};
+	}
 	bool Write(string_t v) override;
 };
 
@@ -185,7 +198,7 @@ public:
 
 	LogicalType GetType() const override {
 		return LogicalType::BLOB;
-	};
+	}
 	bool Write(string_t v) override;
 };
 
@@ -195,28 +208,58 @@ public:
 
 	LogicalType GetType() const override {
 		return LogicalType::BLOB;
-	};
+	}
 	bool Write(string_t v) override;
 };
 
-class IngestColNUMERIC : public IngestColBase {
+class IngestColNUMERICBase : public IngestColBase {
 public:
 	using IngestColBase::Write;
 
-	IngestColNUMERIC(string name, idx_t &cur_row, uint8_t i_digits, uint8_t f_digits) noexcept;
+	IngestColNUMERICBase(string name, idx_t &cur_row, uint8_t width, uint8_t scale) noexcept
+	    : IngestColBase(std::move(name), cur_row), width(width), scale(scale) {
+	}
 
 	LogicalType GetType() const override {
 		return LogicalType::DECIMAL(width, scale);
-	};
-	bool Write(string_t v) override;
-	bool Write(int64_t v) override;
-	bool Write(bool v) override;
-	bool Write(double v) override;
+	}
 
-private:
-	uint8_t storage_type;
+	bool Write(bool v) override {
+		return Write((int64_t)v);
+	}
+
+protected:
 	uint8_t width;
 	uint8_t scale;
+};
+
+template <typename T>
+class IngestColNUMERIC : public IngestColNUMERICBase {
+public:
+	using IngestColNUMERICBase::IngestColNUMERICBase, IngestColNUMERICBase::Write;
+
+	bool Write(string_t v) override {
+		string message;
+		CastParameters parameters(false, &message);
+		if (!TryCastToDecimal::Operation(v, Writer().template Get<T>(), parameters, width, scale)) {
+			string buffer;
+			return parse_money(v.GetData(), v.GetSize(), buffer) &&
+			    TryCastToDecimal::Operation(string_t(buffer), Writer().template Get<T>(), parameters, width, scale);
+		}
+		return true;
+	}
+
+	bool Write(int64_t v) override {
+		string message;
+		CastParameters parameters(false, &message);
+		return TryCastToDecimal::Operation(v, Writer().template Get<T>(), parameters, width, scale);
+	}
+
+	bool Write(double v) override {
+		string message;
+		CastParameters parameters(false, &message);
+		return TryCastToDecimal::Operation(v, Writer().template Get<T>(), parameters, width, scale);
+	}
 };
 
 class IngestColGEO : public IngestColBase {
@@ -225,7 +268,7 @@ public:
 
 	LogicalType GetType() const override {
 		return DDGeoType;
-	};
+	}
 	bool Write(string_t v) override;
 };
 
@@ -235,7 +278,7 @@ public:
 
 	LogicalType GetType() const override {
 		return DDJsonType;
-	};
+	}
 	bool Write(string_t v) override;
 	bool Write(int64_t v) override;
 	bool Write(bool v) override;
@@ -252,7 +295,7 @@ public:
 
 	LogicalType GetType() const override {
 		return DDVariantType;
-	};
+	}
 	bool Write(string_t v) override;
 	bool Write(int64_t v) override;
 	bool Write(bool v) override;
@@ -279,6 +322,63 @@ struct IngestColChildrenMap {
 	std::unordered_map<string, size_t> keys;
 	size_t cnt_valid;
 	std::vector<bool> valid;
+};
+
+template <class T>
+typename T::ReturnType *BuildColumn(const IngestColumnDefinition &col, idx_t &cur_row) {
+	switch(col.column_type) {
+	case ColumnType::String  : return new typename T::template Type<IngestColVARCHAR>  (col.name, cur_row);
+	case ColumnType::Boolean : return new typename T::template Type<IngestColBOOLEAN>  (col.name, cur_row);
+	case ColumnType::Integer : return new typename T::template Type<IngestColBIGINT>   (col.name, cur_row);
+	case ColumnType::Decimal : return new typename T::template Type<IngestColDOUBLE>   (col.name, cur_row);
+	case ColumnType::Date    : return new typename T::template Type<IngestColDATE>     (col.name, cur_row, col.format);
+	case ColumnType::Time    : return new typename T::template Type<IngestColTIME>     (col.name, cur_row, col.format);
+	case ColumnType::Datetime: return new typename T::template Type<IngestColTIMESTAMP>(col.name, cur_row, col.format);
+	case ColumnType::Interval:
+		if (col.format.empty()) {
+			return new typename T::template Type<IngestColINTERVAL>(col.name, cur_row);
+		} else if (col.format == "ISO") {
+			return new typename T::template Type<IngestColINTERVALISO>(col.name, cur_row);
+		} else {
+			return new typename T::template Type<IngestColINTERVALFormat>(col.name, cur_row, col.format);
+		}
+	case ColumnType::Bytes:
+		if (col.format == "base64") {
+			return new typename T::template Type<IngestColBLOBBase64>(col.name, cur_row);
+		}
+		return new typename T::template Type<IngestColBLOBHex>(col.name, cur_row);
+	case ColumnType::Numeric: {
+		uint8_t f_digits = col.f_digits;
+		int need_width = col.i_digits + f_digits;
+		if (need_width <= Decimal::MAX_WIDTH_INT16) {
+			return new typename T::template Type<IngestColNUMERIC<int16_t>>(
+			    col.name, cur_row, Decimal::MAX_WIDTH_INT16, f_digits);
+		} else if (need_width <= Decimal::MAX_WIDTH_INT32) {
+			return new typename T::template Type<IngestColNUMERIC<int32_t>>(
+			    col.name, cur_row, Decimal::MAX_WIDTH_INT32, f_digits);
+		} else if (need_width <= Decimal::MAX_WIDTH_INT64) {
+			return new typename T::template Type<IngestColNUMERIC<int64_t>>(
+			    col.name, cur_row, Decimal::MAX_WIDTH_INT64, f_digits);
+		} else {
+			if (need_width > Decimal::MAX_WIDTH_DECIMAL) {
+				f_digits = MaxValue(0, Decimal::MAX_WIDTH_DECIMAL - col.i_digits);
+			}
+			return new typename T::template Type<IngestColNUMERIC<hugeint_t>>(
+			    col.name, cur_row, Decimal::MAX_WIDTH_DECIMAL, f_digits);
+		}
+	}
+	case ColumnType::Variant: return new typename T::template Type<IngestColVariant>(col.name, cur_row);
+	default:
+		D_ASSERT(false);
+		return new typename T::template Type<IngestColBase>(col.name, cur_row);
+	}
+}
+
+struct ColumnBuilder {
+	using ReturnType = IngestColBase;
+	template <typename T> using Type = T;
+
+	static ReturnType *Build(const IngestColumnDefinition &col, idx_t &cur_row);
 };
 
 } // namespace duckdb

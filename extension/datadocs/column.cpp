@@ -8,7 +8,6 @@
 
 #include "column.hpp"
 #include "utility.h"
-#include "type_conv.h"
 #include "converters.hpp"
 #include "vector_proxy.hpp"
 #include "wkt.h"
@@ -100,7 +99,10 @@ bool IngestColBOOLEAN::Write(bool v) {
 bool IngestColBIGINT::Write(string_t v) {
 	int64_t result;
 	if (!TryCast::Operation(v, result, true)) {
-		return false;
+		std::string buffer;
+		if (!parse_money(v.GetData(), v.GetSize(), buffer) || !TryCast::Operation(string_t(buffer), result, true)) {
+			return false;
+		}
 	}
 	Writer().Set(result);
 	return true;
@@ -126,8 +128,11 @@ bool IngestColBIGINT::Write(double v) {
 
 bool IngestColDOUBLE::Write(string_t v) {
 	double result;
-	if (!TryCast::Operation(v, result, true)) {
-		return false;
+	if (!TryCast::Operation(v, result, false)) {
+		std::string buffer;
+		if (!parse_money(v.GetData(), v.GetSize(), buffer) || !TryCast::Operation(string_t(buffer), result, true)) {
+			return false;
+		}
 	}
 	Writer().Set(result);
 	return true;
@@ -149,11 +154,8 @@ bool IngestColDOUBLE::Write(double v) {
 }
 
 bool IngestColDATE::Write(string_t v) {
-	double t;
-	if (!strptime(string(v), format, t)) {
-		return false;
-	}
-	return WriteExcelDate(t);
+	int32_t &dt = Writer().Get<int32_t>();
+	return strptime(string(v), format, &dt, nullptr);
 }
 
 bool IngestColDATE::WriteExcelDate(double v) {
@@ -162,11 +164,8 @@ bool IngestColDATE::WriteExcelDate(double v) {
 }
 
 bool IngestColTIME::Write(string_t v) {
-	double t;
-	if (!strptime(string(v), format, t)) {
-		return false;
-	}
-	return WriteExcelDate(t);
+	int64_t &micros = Writer().Get<int64_t>();
+	return strptime(string(v), format, nullptr, &micros);
 }
 
 bool IngestColTIME::WriteExcelDate(double v) {
@@ -175,11 +174,13 @@ bool IngestColTIME::WriteExcelDate(double v) {
 }
 
 bool IngestColTIMESTAMP::Write(string_t v) {
-	double t;
-	if (!strptime(string(v), format, t)) {
+	int32_t dt;
+	int64_t &micros = Writer().Get<int64_t>();
+	if (!strptime(string(v), format, &dt, &micros)) {
 		return false;
 	}
-	return WriteExcelDate(t);
+	micros += dt * Interval::MICROS_PER_DAY;
+	return true;
 }
 
 bool IngestColTIMESTAMP::WriteExcelDate(double v) {
@@ -198,6 +199,15 @@ bool IngestColINTERVAL::Write(string_t v) {
 }
 
 bool IngestColINTERVAL::WriteExcelDate(double v) {
+	Writer().Set(interval_t {0, 0, int64_t(v * Interval::MICROS_PER_DAY)});
+	return true;
+}
+
+bool IngestColINTERVALFormat::Write(string_t v) {
+	return strptime_interval(string(v), format, Writer().Get<interval_t>());
+}
+
+bool IngestColINTERVALFormat::WriteExcelDate(double v) {
 	Writer().Set(interval_t {0, 0, int64_t(v * Interval::MICROS_PER_DAY)});
 	return true;
 }
@@ -271,65 +281,6 @@ bool IngestColBLOBHex::Write(string_t v) {
 	if (!string0x_to_bytes(s+i_read, s+size, res))
 		return false;
 	return true;
-}
-
-IngestColNUMERIC::IngestColNUMERIC(string name, idx_t &cur_row, uint8_t i_digits, uint8_t f_digits) noexcept
-    : IngestColBase(std::move(name), cur_row) {
-	int need_width = i_digits + f_digits;
-	if (need_width <= Decimal::MAX_WIDTH_INT16) {
-		width = Decimal::MAX_WIDTH_INT16;
-		storage_type = 0;
-	} else if (need_width <= Decimal::MAX_WIDTH_INT32) {
-		width = Decimal::MAX_WIDTH_INT32;
-		storage_type = 1;
-	} else if (need_width <= Decimal::MAX_WIDTH_INT64) {
-		width = Decimal::MAX_WIDTH_INT64;
-		storage_type = 2;
-	} else {
-		width = Decimal::MAX_WIDTH_DECIMAL;
-		storage_type = 3;
-		if (need_width > Decimal::MAX_WIDTH_DECIMAL) {
-			f_digits = MaxValue(0, Decimal::MAX_WIDTH_DECIMAL - i_digits);
-		}
-	}
-	scale = f_digits;
-}
-
-bool IngestColNUMERIC::Write(string_t v) {
-	string message;
-	CastParameters parameters(false, &message);
-	switch (storage_type) {
-	case 0: return TryCastToDecimal::Operation(v, Writer().Get<int16_t>(), parameters, width, scale);
-	case 1: return TryCastToDecimal::Operation(v, Writer().Get<int32_t>(), parameters, width, scale);
-	case 2: return TryCastToDecimal::Operation(v, Writer().Get<int64_t>(), parameters, width, scale);
-	default: return TryCastToDecimal::Operation(v, Writer().Get<hugeint_t>(), parameters, width, scale);
-	}
-}
-
-bool IngestColNUMERIC::Write(int64_t v) {
-	string message;
-	CastParameters parameters(false, &message);
-	switch (storage_type) {
-	case 0: return TryCastToDecimal::Operation(v, Writer().Get<int16_t>(), parameters, width, scale);
-	case 1: return TryCastToDecimal::Operation(v, Writer().Get<int32_t>(), parameters, width, scale);
-	case 2: return TryCastToDecimal::Operation(v, Writer().Get<int64_t>(), parameters, width, scale);
-	default: return TryCastToDecimal::Operation(v, Writer().Get<hugeint_t>(), parameters, width, scale);
-	}
-}
-
-bool IngestColNUMERIC::Write(bool v) {
-	return Write((int64_t)v);
-}
-
-bool IngestColNUMERIC::Write(double v) {
-	string message;
-	CastParameters parameters(false, &message);
-	switch (storage_type) {
-	case 0: return TryCastToDecimal::Operation(v, Writer().Get<int16_t>(), parameters, width, scale);
-	case 1: return TryCastToDecimal::Operation(v, Writer().Get<int32_t>(), parameters, width, scale);
-	case 2: return TryCastToDecimal::Operation(v, Writer().Get<int64_t>(), parameters, width, scale);
-	default: return TryCastToDecimal::Operation(v, Writer().Get<hugeint_t>(), parameters, width, scale);
-	}
 }
 
 bool IngestColGEO::Write(string_t v) {
@@ -443,6 +394,17 @@ bool IngestColVariant::WriteExcelDate(double v) {
 	}
 	auto writer = Writer();
 	return VariantWriteValue(writer, value);
+}
+
+IngestColBase *ColumnBuilder::Build(const IngestColumnDefinition &col, idx_t &cur_row) {
+	switch(col.column_type) {
+	case ColumnType::Geography:
+		return new IngestColGEO(col.name, cur_row);
+	case ColumnType::JSON:
+		return new IngestColJSON(col.name, cur_row);
+	default:
+		return BuildColumn<ColumnBuilder>(col, cur_row);
+	}
 }
 
 } // namespace duckdb

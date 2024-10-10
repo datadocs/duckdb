@@ -276,41 +276,12 @@ bool ParserImpl::open()
 	return true;
 }
 
-IngestColBase* BuildColumn(const IngestColumnDefinition &col, idx_t &cur_row) {
-	switch(col.column_type) {
-	case ColumnType::String: return new IngestColVARCHAR(col.name, cur_row);
-	case ColumnType::Boolean: return new IngestColBOOLEAN(col.name, cur_row);
-	case ColumnType::Integer: return new IngestColBIGINT(col.name, cur_row);
-	case ColumnType::Decimal: return new IngestColDOUBLE(col.name, cur_row);
-	case ColumnType::Date: return new IngestColDATE(col.name, cur_row, col.format);
-	case ColumnType::Time: return new IngestColTIME(col.name, cur_row, col.format);
-	case ColumnType::Datetime: return new IngestColTIMESTAMP(col.name, cur_row, col.format);
-	case ColumnType::Interval:
-		if (col.format == "ISO") {
-			return new IngestColINTERVALISO(col.name, cur_row);
-		}
-		return new IngestColINTERVAL(col.name, cur_row);
-	case ColumnType::Bytes:
-		if (col.format == "base64") {
-			return new IngestColBLOBBase64(col.name, cur_row);
-		}
-		return new IngestColBLOBHex(col.name, cur_row);
-	case ColumnType::Numeric: return new IngestColNUMERIC(col.name, cur_row, col.i_digits, col.f_digits);
-	case ColumnType::Geography: return new IngestColGEO(col.name, cur_row);
-	case ColumnType::JSON: return new IngestColJSON(col.name, cur_row);
-	case ColumnType::Variant: return new IngestColVariant(col.name, cur_row);
-	default:
-		D_ASSERT(false);
-		return new IngestColBase(col.name, cur_row);
-	}
-}
-
 class IngestColList : public IngestColBase {
 public:
 	using IngestColBase::Write;
 
 	IngestColList(const IngestColumnDefinition &col, idx_t &cur_row)
-	    : IngestColBase(col.name, cur_row), buffer(nullptr), child(BuildColumn(col, list_row)) {
+	    : IngestColBase(col.name, cur_row), buffer(nullptr), child(ColumnBuilder::Build(col, list_row)) {
 	}
 	virtual void SetVector(Vector *new_vec) noexcept override {
 		IngestColBase::SetVector(new_vec);
@@ -431,7 +402,7 @@ public:
 	using IngestColBase::Write;
 
 	IngestColNestedJSON(const IngestColumnDefinition &col, idx_t &cur_row, JSONDispatcher &dispatcher)
-	    : IngestColBase(col.name, cur_row), dispatcher(dispatcher), handler(JSONBuildColumn(col, cur_row)) {
+	    : IngestColBase(col.name, cur_row), dispatcher(dispatcher), handler(JSONColumnBuilder::Build(col, cur_row)) {
 	}
 
 	virtual void SetVector(Vector *new_vec) noexcept override {
@@ -457,7 +428,7 @@ public:
 
 	IngestColNestedXML(const IngestColumnDefinition &col, idx_t &cur_row, XMLParseHandler &dispatcher)
 	    : IngestColBase(col.name, cur_row), dispatcher(dispatcher) {
-		handler.assign(XMLBuildColumn(col, cur_row));
+		handler.assign(XMLColumnBuilder::Build(col, cur_row));
 	}
 
 	virtual void SetVector(Vector *new_vec) noexcept override {
@@ -500,7 +471,7 @@ void ParserImpl::BuildColumns() {
 				column = new IngestColList(col, cur_row);
 			}
 		} else {
-			column = BuildColumn(col, cur_row);
+			column = ColumnBuilder::Build(col, cur_row);
 		}
 		m_columns[index] = std::unique_ptr<IngestColBase>(column);
 	}
@@ -637,7 +608,7 @@ int TType<ColumnType::Boolean>::infer(const CellRaw& cell)
 	}, cell);
 }
 
-static const std::regex _re_check_integer(R"(0|-?[1-9]\d*)");
+static const std::regex _re_check_integer(R"(\$?0|-?\$?[1-9](?:\d*|\d{0,2}(?:,\d{3})+))");
 template<>
 int TType<ColumnType::Integer>::infer(const CellRaw& cell)
 {
@@ -650,7 +621,7 @@ int TType<ColumnType::Integer>::infer(const CellRaw& cell)
 	}, cell);
 }
 
-static const std::regex _re_check_decimal(R"([+-]?(0|[1-9]\d*|\d+\.|\d*\.\d+)(?:[eE][+-]?\d+)?)");
+static const std::regex _re_check_decimal(R"([+-]?(0|[1-9]\d*|\d+\.|\d*\.(\d+))(e[+-]?\d+)?|([+-]?(?:inf(?:inity)?|nan)))", std::regex_constants::icase);
 
 class TDecimal
 {
@@ -663,34 +634,48 @@ public:
 		[this](const std::string& s) -> bool
 		{
 			std::smatch m;
-			if (!std::regex_match(s, m, _re_check_decimal))
+			std::string money;
+			if (!std::regex_match(s, m, _re_check_decimal) &&
+			    !(parse_money(s.data(), s.size(), money) && std::regex_match(money, m, _re_check_decimal))) {
 				return false;
-			if (m.length(1) > 18)
+			}
+			m_is_float |= m[3].matched | m[4].matched;
+			if (m.length(1) > 18) {
 				m_type = ColumnType::Numeric;
+			}
 			if (m_type == ColumnType::Numeric) {
 				if (!string_to_decimal(s.data(), &s[s.size()], buffer))
 					return false;
 				m_idigits = std::max(m_idigits, (uint8_t)buffer[0]);
 				m_fdigits = std::max(m_fdigits, (uint8_t)buffer[1]);
+			} else if (!m[3].matched) {
+				m_idigits = std::max(m_idigits, uint8_t(m.length(1) -
+				    (m[2].matched ? m.length(2) + 1 : m[1].second[-1] == '.')));
+				m_fdigits = std::max(m_fdigits, (uint8_t)m.length(2));
 			}
 			return true;
 		},
-		[](auto v) -> bool { return std::is_arithmetic_v<decltype(v)>; },
+		[this](auto v) -> bool { m_is_float = true; return std::is_arithmetic_v<decltype(v)>; },
 		}, cell);
 	}
 
 	bool create_schema(IngestColumnDefinition& col) const
 	{
 		if (m_valid) {
-			col.column_type = m_type;
-			col.i_digits = m_idigits;
-			col.f_digits = m_fdigits;
+			if (m_type == ColumnType::Numeric || m_type == ColumnType::Decimal && !m_is_float) {
+				col.column_type = ColumnType::Numeric;
+				col.i_digits = m_idigits;
+				col.f_digits = m_fdigits;
+			} else {
+				col.column_type = m_type;
+			}
 		}
 		return m_valid;
 	}
 
 	bool m_valid = true;
 	ColumnType m_type = ColumnType::Decimal;
+	bool m_is_float = false;
 	uint8_t m_idigits = 0;
 	uint8_t m_fdigits = 0;
 	string buffer;
@@ -706,8 +691,7 @@ static const std::unordered_map<std::string, char> _dt_tokens {
 };
 
 // time | number | word | non-word
-static const std::regex _re_dt_components(R"((\d{1,4}\s*:\s*\d\d(?:\s*:\s*\d\d(?:[.,]\d{1,6})?)?(?!\d))|(\d+)|[a-zA-Z]+|[^\da-zA-Z]+)");
-static const std::regex _re_dt_interval(R"((\d{1,4}\s+)?(\d{1,4}\s*:\s*\d\d(?:\s*:\s*\d\d(?:[.,]\d{1,6})?)?))");
+static const std::regex _re_dt_components(R"((\d{1,2}\s*:\s*\d\d(?:\s*:\s*\d\d(?:[.,]\d{1,6})?)?(?!\d))|(\d+)|[a-zA-Z]+|[^\da-zA-Z]+)");
 
 // substitute all numbers in time with corresponding format codes
 static void _build_time_format(std::string& fmt_s, const std::ssub_match& m)
@@ -731,22 +715,8 @@ class TDateTime
 public:
 	bool infer_dt_format(const std::string& input_string, bool month_first = true)
 	{
-		double t = 0.0;
 		std::string fmt_s; // current format string with "%_" placeholders for d/m/y tokens
-
 		std::smatch m;
-		if (std::regex_match(input_string, m, _re_dt_interval))
-		{
-			_build_time_format(fmt_s, m[2]);
-			if (!m[1].matched && strptime(input_string, fmt_s, t))
-				m_formats.push_back(fmt_s);
-			fmt_s[1] = 'J';
-			if (strptime(input_string, fmt_s, t))
-				m_formats.push_back(fmt_s);
-			m_have_time = true;
-			return !m_formats.empty();
-		}
-
 		char c;
 		std::vector<std::pair<int, int>> dmy_pos_length; // positions of '_' placeholders in fmt_s and lengths of corresponding d/m/y tokens (1- or 2- digits)
 
@@ -849,6 +819,7 @@ public:
 			if (n_tokens != n_dmy) // wrong number of d/m/y tokens
 				return false;
 
+			int64_t micros = 0;
 			for (const char* dmy = dmys; *dmy; dmy += n_dmy) // try all possible combinations of d/m/y
 			{
 				for (size_t i = 0; i < n_dmy; ++i) // substitute each token
@@ -857,20 +828,20 @@ public:
 						goto continue_dmy_loop;
 					fmt_s[dmy_pos_length[i].first] = dmy[i]; // put format specifier into its place
 				}
-				if (strptime(input_string, fmt_s, t))
+				if (strptime(input_string, fmt_s, nullptr, &micros))
 					m_formats.push_back(fmt_s);
 			continue_dmy_loop:;
 			}
 
 			m_have_date = true;
-			if (where_hour >= 0 && t - int(t) != 0.0)
+			if (where_hour >= 0 && micros != 0)
 				m_have_time = true;
 		}
 		else // only time
 		{
 			if (where_hour < 0) // neither time nor date found
 				return false;
-			if (strptime(input_string, fmt_s, t))
+			if (strptime(input_string, fmt_s, nullptr, nullptr))
 				m_formats.push_back(fmt_s);
 			m_have_time = true;
 		}
@@ -889,10 +860,10 @@ public:
 			for (auto it = m_formats.end(); it > m_formats.begin();)
 			{
 				--it;
-				double t;
-				if (!strptime(input_string, *it, t))
+				int64_t micros;
+				if (!strptime(input_string, *it, nullptr, &micros))
 					it = m_formats.erase(it);
-				else if (t - int(t) != 0.0)
+				else if (micros != 0)
 					m_have_time = true;
 			}
 			return !m_formats.empty();
@@ -900,6 +871,9 @@ public:
 		[this](const CellRawDate& v) -> bool
 		{
 			double value = v.d;
+			if (value >= 1.0 && value < 417.0) {
+				return false;
+			}
 			if (!m_have_time && value != std::trunc(value))
 				m_have_time = true;
 			if (!m_have_date && value >= 417.0) // up to 10000 hours is duration, not a date
@@ -941,13 +915,74 @@ int TType<ColumnType::Interval>::infer(const CellRaw& cell)
 			interval_t i;
 			return Interval::FromString(input_string, i);
 		},
-		[](const CellRawDate& v) -> bool
-		{
-			return true;
-		},
+		[](const CellRawDate& v) -> bool { return true; },
 		[](auto v) -> bool { return false; },
 	}, cell);
 }
+
+static const std::regex _re_dt_interval(R"((\d+(\s+|\.))?(\d{1,4}\s*:\s*\d\d(?:\s*:\s*\d\d(?:[.,]\d{1,6})?)?))");
+
+class TIntervalFormat
+{
+public:
+	bool infer_format(const std::string& input_string, bool month_first = true) {
+		std::smatch m;
+		if (!std::regex_match(input_string, m, _re_dt_interval)) {
+			return false;
+		}
+		//m_format.append(m.prefix().first, m.prefix().second);
+		//m_h_pos = m_format.size() + 1; // %H will be appended next
+		_build_time_format(m_format, m[3]);
+		//m_format.append(m.suffix().first, m.suffix().second);
+		if (m[2].matched) {
+			m_format[m_h_pos] = *m[2].first == '.' ? 'j' : 'J';
+		}
+		return true;
+	}
+
+	int infer(const CellRaw& cell)
+	{
+		if (!m_valid)
+			return 0;
+		return m_valid = std::visit(overloaded{
+		[this](const std::string& input_string) -> bool
+		{
+			interval_t result;
+			if (m_format.empty()) {
+				return infer_format(input_string) && strptime_interval(input_string, m_format, result);
+			}
+			if (strptime_interval(input_string, m_format, result)) {
+				return true;
+			}
+			if (m_format[m_h_pos] != 'H') {
+				return false;
+			}
+			m_format[m_h_pos] = 'J';
+			if (strptime_interval(input_string, m_format, result)) {
+				return true;
+			}
+			m_format[m_h_pos] = 'j';
+			return strptime_interval(input_string, m_format, result);
+		},
+		[](const CellRawDate& v) -> bool { return true; },
+		[](auto v) -> bool { return false; },
+		}, cell);
+	}
+
+	bool create_schema(IngestColumnDefinition& col) const
+	{
+		if (!m_valid || m_format.empty()) {
+			return false;
+		}
+		col.column_type = ColumnType::Interval;
+		col.format = m_format;
+		return true;
+	}
+
+	bool m_valid = true;
+	std::string m_format;
+	static constexpr size_t m_h_pos = 1;
+};
 
 class TIntervalISO
 {
@@ -1138,7 +1173,8 @@ public:
 		TBytesBase64,
 		TDateTime,
 		TType<ColumnType::Interval>,
-		TIntervalISO
+		TIntervalISO,
+		TIntervalFormat
 	> m_types;
 };
 
@@ -1357,7 +1393,8 @@ private:
 		TBytesBase64,
 		TDateTime,
 		TType<ColumnType::Interval>,
-		TIntervalISO
+		TIntervalISO,
+		TIntervalFormat
 	> m_types;
 	bool m_has_single_value = false;
 	bool m_is_list = false;
@@ -1555,6 +1592,7 @@ public:
 		TDateTime,
 		TType<ColumnType::Interval>,
 		TIntervalISO,
+		TIntervalFormat,
 		TWKT
 	> m_types;
 	enum ValueTypes { ValueString = 1, ValueNumber = 2, ValueBool = 4, ValueSingle = 8, ValueObject = 16, ValueArray = 32 };
@@ -1706,6 +1744,7 @@ private:
 		TDateTime,
 		TType<ColumnType::Interval>,
 		TIntervalISO,
+		TIntervalFormat,
 		TXML,
 		TJSON,
 		TWKT,

@@ -531,4 +531,60 @@ void string_to_variant(const char* src, int src_length, VariantCell& cell)
 	}
 }
 
+bool parse_money(const char *data, size_t size, std::string &buffer) {
+	if (size == 0) {
+		return false;
+	}
+	buffer.clear();
+	const char *end = data + size;
+	if (*data == '-') {
+		buffer += '-';
+		if (++data >= end) {
+			return false;
+		}
+	}
+	if (*data == '$' && ++data >= end) {
+		return false;
+	}
+	int comma_flag = 1; // -1 if seen comma, 1 if not
+	int n_digits = 0;
+	char first_digit = *data;
+	do {
+		char c = *data;
+		if (StringUtil::CharacterIsDigit(c)) {
+			if (n_digits == 1 && first_digit == '0') {
+				return false;
+			}
+			n_digits += comma_flag; // >0 if no commas so far, otherwise <0
+			buffer += c;
+		} else if (c == ',') {
+			if (n_digits == -3) {
+			} else if (n_digits >= 1 && n_digits <= 3) {
+				if (first_digit == '0') {
+					return false;
+				}
+				comma_flag = -1;
+			} else {
+				return false;
+			}
+			n_digits = 0;
+		} else if (c == '.') {
+			buffer += '.';
+			if (++data >= end) {
+				return false;
+			}
+			do {
+				if (!StringUtil::CharacterIsDigit(*data)) {
+					return false;
+				}
+				buffer += *data;
+			} while (++data < end);
+			break;
+		} else {
+			return false;
+		}
+	} while (++data < end);
+	return n_digits > 0 || n_digits == -3;
+}
+
 }

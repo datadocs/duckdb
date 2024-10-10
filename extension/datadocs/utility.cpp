@@ -4,9 +4,11 @@
 #include <cctype>
 #include <cmath>
 #include <limits>
+#include <charconv>
 #include <regex>
 
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/cast_helpers.hpp"
 #include "utility.h"
 
 namespace duckdb {
@@ -95,7 +97,7 @@ static int read_number(const char*& src, size_t limit, int& result)
 	return (int)i;
 }
 
-bool strptime(const std::string& s_src, const std::string& s_fmt, double& dt)
+bool strptime(const std::string& s_src, const std::string& s_fmt, int32_t *dt, int64_t *micros)
 {
 	int day = 1;
 	int month = 1;
@@ -152,20 +154,6 @@ bool strptime(const std::string& s_src, const std::string& s_fmt, double& dt)
 				if (h == 12)
 					h = 0;
 				h_12 = true;
-				break;
-			case 'J':
-				if (!read_number(src, 4, h)) return false;
-				if (StringUtil::CharacterIsSpace(*src))
-				{
-					while (StringUtil::CharacterIsSpace(*++src));
-					int h2 = 0;
-					if (read_number(src, 2, h2))
-					{
-						if (h2 > 23) return false;
-						h = h * 24 + h2;
-					}
-				}
-				h_12 = false;
 				break;
 			case 'p':
 				if (_to_lower(src[1]) != 'm')
@@ -232,46 +220,169 @@ bool strptime(const std::string& s_src, const std::string& s_fmt, double& dt)
 	if (*src != '\0')
 		return false;
 
-	if (h_12 && h_pm)
-		h += 12;
-	dt = (h * 3600 + (m + tz_offset) * 60 + s + ms / 1000000.0) / 86400.0;
-
-	if (has_date)
-	{
-		int max_day;
-		if (month == 4 || month == 6 || month == 9 || month == 11)
-			max_day = 30;
-		else if (month == 2)
-			max_day = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) ? 29 : 28;
-		else
-			max_day = 31;
-		if (day > max_day)
-			return false;
-
-		int y = year;
-		y -= month <= 2;
-		int era = (y >= 0 ? y : y - 399) / 400;
-		unsigned yoe = (unsigned)(y - era * 400); // [0, 399]
-		unsigned doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1; // [0, 365]
-		unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
-
-		dt += era * 146097 + (int)doe - 719468 + 25569;
+	if (micros) {
+		if (h_12 && h_pm)
+			h += 12;
+		*micros = ((h * 60 + (m + tz_offset)) * 60 + s) * 1000000LL + ms;
 	}
-	else if (tz_offset != 0)
-	{
-		dt = dt - int(dt);
-		if (dt < 0)
-			dt += 1.0;
+	if (dt) {
+		if (has_date)
+		{
+			int max_day;
+			if (month == 4 || month == 6 || month == 9 || month == 11)
+				max_day = 30;
+			else if (month == 2)
+				max_day = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) ? 29 : 28;
+			else
+				max_day = 31;
+			if (day > max_day)
+				return false;
+
+			int y = year;
+			y -= month <= 2;
+			int era = (y >= 0 ? y : y - 399) / 400;
+			unsigned yoe = (unsigned)(y - era * 400); // [0, 399]
+			unsigned doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1; // [0, 365]
+			unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+
+			*dt = era * 146097 + (int)doe - 719468;
+		} else {
+			*dt = 0;
+		}
 	}
 	return true;
 }
+bool strptime_interval(const std::string &s_src, const std::string &s_fmt, interval_t &result) {
+	result = {};
+	bool seen_years = false;
+	int seen_time = 0;
+	int sign = 0;
+	const char *src = s_src.data();
+	const char *end = src + s_src.size();
+	for (const char *fmt = s_fmt.data(); *fmt != 0; ++fmt) {
+		switch (*fmt) {
+		case '%': {
+			char code = *++fmt;
+			switch (code) {
+			case '-':
+				if (*src == '-') {
+					sign = -1;
+					++src;
+				} else {
+					sign = 1;
+				}
+				continue;
+			case '%':
+				if (*src++ != '%')
+					return false;
+				continue;
+			}
+			int64_t num;
+parse_number:
+			auto [suffix, ec] = std::from_chars(src, end, num);
+			if (ec != std::errc()) {
+				return false;
+			}
+			if (sign) {
+				if (num < 0) {
+					return false;
+				}
+				num *= sign;
+			}
+			switch (code) {
+			case 'd':
+				seen_time |= 0b100;
+				result.days += num;
+				break;
+			case 'm':
+				if (seen_years && (num > 11 || num < -11)) {
+					return false;
+				}
+				result.months += num;
+				break;
+			case 'y':
+				result.months += num * 12;
+				seen_years = true;
+				break;
+			case 'J':
+				if (StringUtil::CharacterIsSpace(*suffix)) {
+					seen_time |= 0b100;
+					result.days += num;
+					src = suffix;
+					while (StringUtil::CharacterIsSpace(*++src));
+					code = 'H';
+					goto parse_number;
+				} else {
+					seen_time |= 0b10;
+					result.micros += num * Interval::MICROS_PER_HOUR;
+				}
+				break;
+			case 'j':
+				if (*suffix == '.') {
+					seen_time |= 0b100;
+					result.days += num;
+					src = suffix + 1;
+					code = 'H';
+					goto parse_number;
+				} else {
+					seen_time |= 0b10;
+					result.micros += num * Interval::MICROS_PER_HOUR;
+				}
+				break;
+			case 'H':
+				if ((seen_time & 0b100) && (num > 23 || num < -23)) {
+					return false;
+				}
+				seen_time |= 0b10;
+				result.micros += num * Interval::MICROS_PER_HOUR;
+				break;
+			case 'M':
+				if ((seen_time & 0b10) && (num > 59 || num < -59)) {
+					return false;
+				}
+				seen_time |= 1;
+				result.micros += num * Interval::MICROS_PER_MINUTE;
+				break;
+			case 'S':
+				if ((seen_time & 1) && (num > 59 || num < -59)) {
+					return false;
+				}
+				result.micros += num * Interval::MICROS_PER_SEC;
+				break;
+			case 'f': {
+				size_t exp = suffix - src;
+				exp -= *src == '-';
+				if (exp > 6) {
+					return false;
+				}
+				result.micros += num * NumericHelper::POWERS_OF_TEN[6 - exp];
+				break;
+			}
+			default:
+				return false;
+			}
+			src = suffix;
+			break;
+		}
 
-//double strptime(const std::string& src, const std::string& fmt)
-//{
-//	double dt;
-//	if (!strptime(src.data(), fmt.data(), dt))
-//		throw std::invalid_argument("invalid value");
-//	return dt;
-//}
+		case ' ':
+		case '\t':
+		case '\r':
+		case '\n':
+		case '\f':
+		case '\v':
+			while (StringUtil::CharacterIsSpace(*src))
+				++src;
+			break;
+		default:
+			if (*src++ != *fmt)
+				return false;
+			break;
+		}
+	}
+	if (*src != '\0')
+		return false;
+	return true;
+}
 
 }

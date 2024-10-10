@@ -18,7 +18,33 @@ public:
 	IngestColBase &column;
 };
 
-XMLValueBase *XMLBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row);
+class XMLValue : public XMLValueBase
+{
+public:
+	using XMLValueBase::XMLValueBase;
+	bool new_text(std::string&& s) override
+	{
+		if (s.empty() || !column.Write(s)) {
+			column.WriteNull();
+		}
+		return true;
+	}
+};
+
+struct XMLColumnBuilder {
+	template <class Col>
+	class XMLCol : public XMLValue, public Col {
+	public:
+		template<typename... Args>
+		XMLCol(Args&&... args) : XMLValue(this), Col(std::forward<Args>(args)...) {
+		}
+	};
+
+	using ReturnType = XMLValueBase;
+	template <typename T> using Type = XMLCol<T>;
+
+	static ReturnType *Build(const IngestColumnDefinition &col, idx_t &cur_row);
+};
 
 class XMLParser : public ParserImpl
 {

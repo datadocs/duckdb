@@ -57,7 +57,21 @@ protected:
 	}
 };
 
-JSONValue *JSONBuildColumn(const IngestColumnDefinition &col, idx_t &cur_row, int list_level=0);
+struct JSONColumnBuilder {
+	template <class Col>
+	class JSONCol : public JSONValue, public Col {
+	public:
+		template<typename... Args>
+		JSONCol(Args&&... args) : JSONValue(this), Col(std::forward<Args>(args)...) {
+		}
+		virtual ~JSONCol() = default;
+	};
+
+	using ReturnType = JSONValue;
+	template <typename T> using Type = JSONCol<T>;
+
+	static ReturnType *Build(const IngestColumnDefinition &col, idx_t &cur_row, int list_level=0);
+};
 
 class JSONTopListStruct : public JSONHandler {
 public:
