@@ -28,8 +28,6 @@ public:
 class Column;
 class BaseReader;
 
-IngestColBase* BuildColumn(const IngestColumnDefinition &col, idx_t &cur_row);
-
 class ParserImpl : public Parser
 {
 public:
