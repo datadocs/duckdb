@@ -1,8 +1,10 @@
 #include "rapidjson/writer.h"
 #include "rapidjson/stringbuffer.h"
 namespace rj = rapidjson;
-#include "json_common.hpp"
 
+#include "duckdb/common/case_insensitive_map.hpp"
+
+#include "json_common.hpp"
 #include "inferrer_impl.h"
 #include "ingest_schema.hpp"
 
@@ -191,17 +193,32 @@ static const std::vector<std::string> type_index {
 	"JSON"
 };
 
-template <class E>
-class EnumMap : public std::unordered_map<std::string, E> {
+class ColumnTypeMap : public case_insensitive_map_t<ColumnType> {
 public:
-	EnumMap(const std::vector<std::string> &index) {
+	ColumnTypeMap(const std::vector<std::string> &index, std::initializer_list<value_type> init) {
 		for (size_t i = 0; i < index.size(); ++i) {
-			this->emplace(index[i], static_cast<E>(i));
+			this->emplace(index[i], static_cast<ColumnType>(i));
 		}
+		this->insert(init);
 	}
 };
 
-static const EnumMap<ColumnType> type_map(type_index);
+static const ColumnTypeMap type_map(type_index, {
+	{"BOOL"     , ColumnType::Boolean},
+	{"INTEGER"  , ColumnType::Integer},
+	{"INT"      , ColumnType::Integer},
+	{"DECIMAL"  , ColumnType::Numeric},
+	{"FLOAT"    , ColumnType::Decimal},
+	{"STRING"   , ColumnType::String},
+	{"TEXT"     , ColumnType::String},
+	{"STR"      , ColumnType::String},
+	{"BYTES"    , ColumnType::Bytes},
+	{"BYTEARRAY", ColumnType::Bytes},
+	{"BYTEA"    , ColumnType::Bytes},
+	{"DATETIME" , ColumnType::Datetime},
+	{"DURATION" , ColumnType::Interval},
+	{"GEO"      , ColumnType::Geography}
+});
 
 template <>
 class jhelper<IngestColumnDefinition> {
