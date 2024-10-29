@@ -363,7 +363,9 @@ bool IngestColJSON::WriteExcelDate(double v) {
 
 bool IngestColVariant::Write(string_t v) {
 	auto writer = Writer();
-	return VariantWriteValue(writer, Value(v));
+	Value value;
+	string_to_variant(v.GetData(), v.GetSize(), value);
+	return VariantWriteValue(writer, value);
 }
 
 bool IngestColVariant::Write(int64_t v) {

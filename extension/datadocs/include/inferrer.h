@@ -33,38 +33,11 @@ enum class ColumnType : uint8_t {
 	JSON
 };
 
-struct VariantCell
-{
-	typedef int32_t IndexType;
-	inline static constexpr
-	int inplace_size[] {    0,     -1,       1,       4,        4,        -1,         -1,    -1,    4,   -1,       -1,    -1,      -1,        -1,     -1,   -1 };
-	enum VariantTypeId { Null, String, Boolean, Integer, Unsigned, Integer64, Unsigned64, Float, Date, Time, Datetime, Bytes, Numeric, Geography, Struct, List };
-
-	template<VariantTypeId new_type, typename T>
-	void assign(T new_value)
-	{
-		type = new_type;
-		if constexpr (inplace_size[new_type] <= 0)
-			data.assign((const char*)&new_value, sizeof(new_value));
-		else if constexpr (inplace_size[new_type] == 1)
-			data = (unsigned char)new_value;
-		else
-		{
-			static_assert (sizeof(T) == sizeof(IndexType) && sizeof(T) == inplace_size[new_type]);
-			IndexType value = *(IndexType*)&new_value;
-			data.assign((const char*)&value, sizeof(value));
-		}
-	}
-
-	VariantTypeId type = Null;
-	std::string data;
-};
-
 class Cell;
-class Cell : public std::variant<std::string, bool, int64_t, int32_t, int16_t, int8_t, double, std::vector<Cell>, VariantCell>
+class Cell : public std::variant<std::string, bool, int64_t, int32_t, int16_t, int8_t, double, std::vector<Cell>>
 {
 public:
-	using base = std::variant<std::string, bool, int64_t, int32_t, int16_t, int8_t, double, std::vector<Cell>, VariantCell>;
+	using base = std::variant<std::string, bool, int64_t, int32_t, int16_t, int8_t, double, std::vector<Cell>>;
 	using base::base;
 	using base::operator =;
 };
