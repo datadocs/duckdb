@@ -8,7 +8,10 @@
 #include <regex>
 
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/common/types/cast_helpers.hpp"
+#include "duckdb/common/operator/decimal_cast_operators.hpp"
 
+#include "datadocs.hpp"
 #include "inferrer.h"
 #include "wkt.h"
 #include "type_conv.h"
@@ -231,7 +234,7 @@ bool string_to_decimal(const char* begin, const char* end, std::string& data)
 static const std::regex re_variant_integer(R"(0|-?[1-9]\d*)");
 static const std::regex re_variant_float(R"(-?(0|[1-9]\d*|\d+\.|\d*\.\d+)(?:[eE][+-]?\d+)?)");
 
-static bool string_to_variant_number(const char* begin, const char* end, VariantCell& cell)
+static bool string_to_variant_number(const char* begin, const char* end, Value &value)
 {
 	if (std::regex_match(begin, end, re_variant_integer))
 	{
@@ -241,9 +244,9 @@ static bool string_to_variant_number(const char* begin, const char* end, Variant
 			if (std::from_chars(begin, end, res, 10).ec == std::errc())
 			{
 				if (res < std::numeric_limits<int>::min())
-					cell.assign<VariantCell::Integer64>(res);
+					value = res;
 				else
-					cell.assign<VariantCell::Integer>((int)res);
+					value = (int)res;
 				return true;
 			}
 		}
@@ -253,9 +256,9 @@ static bool string_to_variant_number(const char* begin, const char* end, Variant
 			if (std::from_chars(begin, end, res, 10).ec == std::errc())
 			{
 				if (res > std::numeric_limits<unsigned>::max())
-					cell.assign<VariantCell::Unsigned64>(res);
+					value = Value::UBIGINT(res);
 				else
-					cell.assign<VariantCell::Unsigned>((unsigned)res);
+					value = Value::UINTEGER(unsigned(res));
 				return true;
 			}
 		}
@@ -271,13 +274,17 @@ static bool string_to_variant_number(const char* begin, const char* end, Variant
 			double res = std::strtod(begin, &str_end);
 			if (str_end != end)
 				return false;
-			cell.assign<VariantCell::Float>(res);
+			value = res;
 			return true;
 		}
 	}
-	if (!string_to_decimal(begin, end, cell.data))
+	hugeint_t res;
+	std::string message;
+	CastParameters parameters(false, &message);
+	if (!TryCastToDecimal::Operation(string_t(begin, end - begin), res, parameters, dd_numeric_width, dd_numeric_scale)) {
 		return false;
-	cell.type = VariantCell::Numeric;
+	}
+	value = Value::DECIMAL(res, dd_numeric_width, dd_numeric_scale);
 	return true;
 }
 
@@ -292,14 +299,14 @@ static const std::unordered_map<std::string, int> variant_dt_tokens {
 	{"jan", 1}, {"feb", 2}, {"mar", 3}, {"apr", 4}, {"may", 5}, {"jun", 6}, {"jul", 7}, {"aug", 8}, {"sep", 9}, {"oct", 10}, {"nov", 11}, {"dec", 12}
 };
 
-static bool string_to_variant_date(const char* begin, const char* end, VariantCell& cell, bool month_first = true)
+static bool string_to_variant_date(const char* begin, const char* end, Value& value, bool month_first = true)
 {
 	char c;
-	int yy = -1, mm = -1, HH = -1, MM = 0, SS = 0;
+	int yy = -1, mm = -1, HH = -1, MM = 0, SS = 0, FF = 0;
+	bool has_date = false;
+	int64_t micros = 0;
 	int ampm = -1, tz_offset = 0;
 	int where_year = -1; // if found definite year token - how many d/m/y were found before it
-	double dt, FF = 0;
-	VariantCell::VariantTypeId cell_type;
 	std::vector<int> dmy; // d/m/y tokens (1- or 2- digits)
 	std::vector<bool> dmy1; // true if token is 1-digit (cannot be year)
 
@@ -350,8 +357,7 @@ static bool string_to_variant_date(const char* begin, const char* end, VariantCe
 				SS = std::stoi(m->str(3));
 				if ((*m)[4].matched)
 				{
-					FF = std::stoi(m->str(4));
-					FF /= pow10i[m->length(4)];
+					FF = std::stoi(m->str(4)) * NumericHelper::POWERS_OF_TEN[6 - m->length(4)];
 				}
 			}
 		}
@@ -438,27 +444,28 @@ static bool string_to_variant_date(const char* begin, const char* end, VariantCe
 			unsigned yoe = (unsigned)(y - era * 400); // [0, 399]
 			unsigned doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1; // [0, 365]
 			unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
-			date = era * 146097 + (int)doe - 719468 + 25569;
+			date = era * 146097 + (int)doe - 719468;
 			break;
 		}
 		if (date < 0)
 			return false;
 		if (HH < 0)
 		{
-			cell.assign<VariantCell::Date>(date);
+			value = Value::DATE(date_t(date));
 			return true;
 		}
-		cell_type = VariantCell::Datetime;
-		dt = date;
+		micros = date * Interval::MICROS_PER_DAY;
+		has_date = true;
 	}
 	else
 	{
 		if (HH < 0)
 			return false;
-		dt = 0;
-		cell_type = VariantCell::Time;
 	}
 
+	if (HH > 23 || MM > 59 || SS > 59) {
+		return false;
+	}
 	if (HH < 13)
 	{
 		if (ampm == 0)
@@ -470,15 +477,20 @@ static bool string_to_variant_date(const char* begin, const char* end, VariantCe
 			if (HH < 12) HH += 12;
 		}
 	}
-	dt += (HH * 3600 + (MM + tz_offset) * 60 + SS + FF) / 86400.0;
-	if (tz_offset != 0 && cell_type == VariantCell::Time)
-	{
-		dt = dt - int(dt);
-		if (dt < 0)
-			dt += 1.0;
+	micros += (HH * 3600 + (MM + tz_offset) * 60 + SS) * 1000000LL + FF;
+	if (tz_offset != 0 && !has_date) {
+		if (micros >= Interval::MICROS_PER_DAY) {
+			micros %= Interval::MICROS_PER_DAY;
+		} else if (micros < 0) {
+			micros = micros % Interval::MICROS_PER_DAY + Interval::MICROS_PER_DAY;
+		}
+		
 	}
-	cell.assign<VariantCell::Float>(dt);
-	cell.type = cell_type;
+	if (has_date) {
+		value = Value::TIMESTAMP(timestamp_t(micros));
+	} else {
+		value = Value::TIME(dtime_t(micros));
+	}
 	return true;
 }
 
@@ -486,13 +498,13 @@ static const std::unordered_map<std::string, bool> variant_bool_dict {
 	{"false", false}, {"False", false}, {"FALSE", false}, {"true", true}, {"True", true}, {"TRUE", true}
 };
 
-static bool string_to_variant_inner(const char* begin, const char* end, VariantCell& cell)
+static bool string_to_variant_inner(const char* begin, const char* end, Value& value)
 {
 	while (StringUtil::CharacterIsSpace(*begin))
 		if (++begin >= end)
 			return false;
 	while (StringUtil::CharacterIsSpace(end[-1])) --end;
-	if (string_to_variant_number(begin, end, cell))
+	if (string_to_variant_number(begin, end, value))
 		return true;
 	size_t length = end - begin;
 	if (length == 4 || length == 5)
@@ -500,34 +512,30 @@ static bool string_to_variant_inner(const char* begin, const char* end, VariantC
 		auto it = variant_bool_dict.find(std::string(begin, end));
 		if (it != variant_bool_dict.end())
 		{
-			cell.assign<VariantCell::Boolean>(it->second);
+			value = Value::BOOLEAN(it->second);
 			return true;
 		}
 	}
-	if (string_to_variant_date(begin, end, cell))
+	if (string_to_variant_date(begin, end, value))
 		return true;
 	if (length % 2 == 0 && begin[0] == '0' && begin[1] == 'x')
 	{
 		length = (length - 2) / 2;
-		cell.type = VariantCell::Bytes;
-		cell.data.resize(length);
-		return string0x_to_bytes(begin + 2, end, cell.data.data());
-	}
-	cell.data.clear();
-	if (wkt_to_bytes(begin, end, cell.data) && begin == end)
-	{
-		cell.type = VariantCell::Geography;
+		string s;
+		s.resize(length);
+		if (!string0x_to_bytes(begin + 2, end, s.data())) {
+			return false;
+		}
+		value = Value::BLOB_RAW(s);
 		return true;
 	}
 	return false;
 }
 
-void string_to_variant(const char* src, int src_length, VariantCell& cell)
+void string_to_variant(const char* src, int src_length, Value &value)
 {
-	if (!string_to_variant_inner(src, src + src_length, cell))
-	{
-		cell.type = VariantCell::String;
-		cell.data.assign(src, src_length);
+	if (!string_to_variant_inner(src, src + src_length, value)) {
+		value = string_t(src, src_length);
 	}
 }
 
