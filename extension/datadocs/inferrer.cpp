@@ -595,18 +595,50 @@ public:
 	bool m_valid = true;
 };
 
-template<>
-int TType<ColumnType::Boolean>::infer(const CellRaw& cell)
+class TBoolean
 {
-	if (!m_valid)
-		return 0;
-	return m_valid = std::visit(overloaded{
-	[](const std::string& s) -> bool { return bool_dict.find(s) != bool_dict.end(); },
-	[](bool v) -> bool { return true; },
-	[](int64_t v) -> bool { return v == 0 || v == 1; },
-	[](auto v) -> bool { return false; },
-	}, cell);
-}
+public:
+	bool create_schema(IngestColumnDefinition& col) const
+	{
+		if (m_valid && m_int_mask == 3) {
+			col.column_type = ColumnType::Boolean;
+			return true;
+		}
+		return false;
+	}
+
+	int infer(const CellRaw& cell) {
+		if (!m_valid)
+			return 0;
+		return m_valid = std::visit(overloaded{
+		[this](const std::string& s) -> bool {
+			if (bool_dict.find(s) == bool_dict.end()) {
+				return false;
+			}
+			if (s[0] == '0') {
+				m_int_mask |= 1;
+			} else if (s[0] == '1') {
+				m_int_mask |= 2;
+			} else {
+				m_int_mask = 3;
+			}
+			return true;
+		},
+		[this](bool v) -> bool { m_int_mask = 3; return true; },
+		[this](int64_t v) -> bool {
+			if (v < 0 || v > 1) {
+				return false;
+			}
+			m_int_mask |= (1 << v);
+			return true;
+		},
+		[](auto v) -> bool { return false; },
+		}, cell);
+	}
+
+	bool m_valid = true;
+	int m_int_mask = 0; // seen "0" value and seen "1"
+};
 
 static const std::regex _re_check_integer(R"(\$?0|-?\$?[1-9](?:\d*|\d{0,2}(?:,\d{3})+))");
 template<>
@@ -1195,7 +1227,7 @@ public:
 
 	bool m_valid = true;
 	std::tuple<
-		TType<ColumnType::Boolean>,
+		TBoolean,
 		TType<ColumnType::Integer>,
 		TDecimal,
 		TBytes,
@@ -1415,7 +1447,7 @@ private:
 	}
 
 	std::tuple<
-		TType<ColumnType::Boolean>,
+		TBoolean,
 		TType<ColumnType::Integer>,
 		TDecimal,
 		TBytes,
@@ -1613,7 +1645,7 @@ public:
 
 public:
 	std::tuple<
-		TType<ColumnType::Boolean>,
+		TBoolean,
 		TType<ColumnType::Integer>,
 		TDecimal,
 		TBytes,
@@ -1765,7 +1797,7 @@ public:
 	double bytes_per_value;
 private:
 	std::tuple<
-		TType<ColumnType::Boolean>,
+		TBoolean,
 		TType<ColumnType::Integer>,
 		TDecimal,
 		TBytes,
