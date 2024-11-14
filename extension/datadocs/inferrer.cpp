@@ -855,8 +855,13 @@ public:
 		return m_valid = std::visit(overloaded{
 		[this](const std::string& input_string) -> bool
 		{
-			if (m_formats.empty())
-				return infer_dt_format(input_string);
+			if (m_formats.empty()) {
+				if (!infer_dt_format(input_string)) {
+					return false;
+				}
+				m_unique_value = input_string;
+				return true;
+			}
 			for (auto it = m_formats.end(); it > m_formats.begin();)
 			{
 				--it;
@@ -866,7 +871,13 @@ public:
 				else if (micros != 0)
 					m_have_time = true;
 			}
-			return !m_formats.empty();
+			if (m_formats.empty()) {
+				return false;
+			}
+			if (input_string != m_unique_value) {
+				m_unique_value.clear();
+			}
+			return true;
 		},
 		[this](const CellRawDate& v) -> bool
 		{
@@ -888,6 +899,23 @@ public:
 	{
 		if (m_valid)
 		{
+			if (!m_unique_value.empty()) {
+				D_ASSERT(!m_formats.empty());
+				const std::string &fmt = m_formats[0];
+				if (fmt[0] != '%' || fmt[1] == '%') {
+					return false;
+				}
+				size_t last_perc = 0, sz = fmt.size();
+				for (size_t i = 2; i < sz; ++i) {
+					if (fmt[i] == '%') {
+						last_perc = i;
+						i += 1;
+					}
+				}
+				if (fmt[last_perc + 1] == '%' || !(last_perc == sz - 2 || last_perc == sz - 3 && fmt[sz - 1] == 'Z')) {
+					return false;
+				}
+			}
 			if (m_have_date)
 				col.column_type = m_have_time ? ColumnType::Datetime : ColumnType::Date;
 			else
@@ -902,6 +930,7 @@ public:
 	bool m_have_time = false;
 	bool m_have_date = false;
 	std::vector<std::string> m_formats;
+	std::string m_unique_value;
 };
 
 template<>
