@@ -176,6 +176,7 @@ static void jwrite(char *obj, rj::Writer<StdStringBuffer> &json) {
 
 #define JSON_FIELD(cls, attr) {#attr, {offsetof(cls, attr), jread<decltype(cls::attr)>, jwrite<decltype(cls::attr)>}}
 
+// matches ColumnType
 static const std::vector<std::string> type_index {
 	"VARCHAR",
 	"BOOLEAN",
@@ -184,6 +185,7 @@ static const std::vector<std::string> type_index {
 	"DATE",
 	"TIME",
 	"TIMESTAMP",
+	"TIMESTAMPTZ",
 	"INTERVAL",
 	"BLOB",
 	"NUMERIC",
