@@ -43,7 +43,7 @@ bool is_integer(double v)
 static const char* _weekdays[] = { "sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday" };
 static const char* _months[] = { "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december" };
 
-static const std::regex _re_z(R"(([+-])(\d\d):?([0-5]\d)(?::?[0-5]\d(?:\.\d{1,6})?)?)");
+static const std::regex _re_z(R"(([+-])(\d\d?):?([0-5]\d)(?::?[0-5]\d(?:\.\d{1,6})?)?)");
 
 inline static char _to_lower(char c)
 {
@@ -178,17 +178,21 @@ bool strptime(const std::string& s_src, const std::string& s_fmt, int32_t *dt, i
 				break;
 			case 'z':
 				{
-					std::cmatch mm;
-					if (!std::regex_search(src, mm, _re_z, std::regex_constants::match_continuous))
-						return false;
-					const char* s;
-					int tz_h;
-					s = mm[2].first; read_number(s, 2, tz_h);
-					s = mm[3].first; read_number(s, 2, tz_offset);
-					tz_offset += tz_h * 60;
-					if (*src == '+')
-						tz_offset = -tz_offset;
-					src += mm.length();
+					if (*src == 'z' || *src == 'Z') {
+						++src;
+					} else {
+						std::cmatch mm;
+						if (!std::regex_search(src, mm, _re_z, std::regex_constants::match_continuous))
+							return false;
+						const char* s;
+						int tz_h;
+						s = mm[2].first; read_number(s, 2, tz_h);
+						s = mm[3].first; read_number(s, 2, tz_offset);
+						tz_offset += tz_h * 60;
+						if (*src == '+')
+							tz_offset = -tz_offset;
+						src += mm.length();
+					}
 				}
 				break;
 			case 'Z':
@@ -252,6 +256,7 @@ bool strptime(const std::string& s_src, const std::string& s_fmt, int32_t *dt, i
 	}
 	return true;
 }
+
 bool strptime_interval(const std::string &s_src, const std::string &s_fmt, interval_t &result) {
 	result = {};
 	bool seen_years = false;

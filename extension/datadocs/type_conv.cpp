@@ -288,10 +288,10 @@ static bool string_to_variant_number(const char* begin, const char* end, Value &
 	return true;
 }
 
-static const std::regex re_variant_dt_components(R"((\d{1,4})\s*:\s*(\d\d)(?:\s*:\s*(\d\d)(?:[.,](\d{1,6}))?)?(?!\d)|(\d+)|([a-zA-Z]+))");
+static const std::regex re_variant_dt_components(R"((\d{1,2})\s*:\s*(\d\d)(?:\s*:\s*(\d\d)(?:[.,](\d{1,6}))?)?(?!\d)|(\d+)|([a-zA-Z]+))");
 
 static const std::unordered_map<std::string, int> variant_dt_tokens {
-	{"utc", 0}, {"gmt", 0}, {"t", 0}, {"z", 0},
+	{"utc", 'z'}, {"gmt", 'z'}, {"t", 0}, {"z", 'z'},
 	{"am", 'a'}, {"pm", 'p'},
 	{"sunday", 0}, {"monday", 0}, {"tuesday", 0}, {"wednesday", 0}, {"thursday", 0}, {"friday", 0}, {"saturday", 0},
 	{"sun", 0}, {"mon", 0}, {"tue", 0}, {"wed", 0}, {"thu", 0}, {"fri", 0}, {"sat", 0},
@@ -303,7 +303,7 @@ static bool string_to_variant_date(const char* begin, const char* end, Value& va
 {
 	char c;
 	int yy = -1, mm = -1, HH = -1, MM = 0, SS = 0, FF = 0;
-	bool has_date = false;
+	bool has_date = false, have_tz = false;
 	int64_t micros = 0;
 	int ampm = -1, tz_offset = 0;
 	int where_year = -1; // if found definite year token - how many d/m/y were found before it
@@ -316,8 +316,8 @@ static bool string_to_variant_date(const char* begin, const char* end, Value& va
 		if ((*m)[5].matched) // token is number
 		{
 			int lng = (int)m->length();
-			if ((lng == 4 || lng == 6) && m->position() > 0 && (c = begin[m->position() - 1], c == '+' || c == '-') && // may be timezone offset -0100
-				!(lng == 4 && m->str() > "1500")) // though it also may be year. Limit offset to 1500 in the hopes that Samoa or Kiribati won't shift further east.
+			if ((lng == 4 || lng == 6) && HH >= 0 && (c = begin[m->position() - 1], c == '+' || c == '-') && // may be timezone offset -0100
+				!(lng == 4 && m->str() > "1500") && !have_tz) // though it also may be year. Limit offset to 1500 in the hopes that Samoa or Kiribati won't shift further east.
 			{
 				int tz_h = 0;
 				const char* s = begin + m->position();
@@ -327,6 +327,7 @@ static bool string_to_variant_date(const char* begin, const char* end, Value& va
 				tz_offset += tz_h * 60;
 				if (s[-1] == '+')
 					tz_offset = -tz_offset;
+				have_tz = true;
 			}
 			else
 			{
@@ -348,17 +349,24 @@ static bool string_to_variant_date(const char* begin, const char* end, Value& va
 		}
 		else if ((*m)[1].matched) // valid time sequence
 		{
-			if (HH >= 0)
-				return false;
-			HH = std::stoi(m->str(1));
-			MM = std::stoi(m->str(2));
-			if ((*m)[3].matched)
-			{
-				SS = std::stoi(m->str(3));
-				if ((*m)[4].matched)
+			if (HH < 0) {
+				HH = std::stoi(m->str(1));
+				MM = std::stoi(m->str(2));
+				if ((*m)[3].matched)
 				{
-					FF = std::stoi(m->str(4)) * NumericHelper::POWERS_OF_TEN[6 - m->length(4)];
+					SS = std::stoi(m->str(3));
+					if ((*m)[4].matched)
+					{
+						FF = std::stoi(m->str(4)) * NumericHelper::POWERS_OF_TEN[6 - m->length(4)];
+					}
 				}
+			} else if (!have_tz && !(*m)[3].matched && (c = begin[m->position() - 1], c == '+' || c == '-')) {
+				tz_offset = std::stoi(m->str(1)) * 60 + std::stoi(m->str(2));
+				if (c == '+')
+					tz_offset = -tz_offset;
+				have_tz = true;
+			} else {
+				return false;
 			}
 		}
 		else // a word
@@ -368,12 +376,24 @@ static bool string_to_variant_date(const char* begin, const char* end, Value& va
 			auto token = variant_dt_tokens.find(s);
 			if (token == variant_dt_tokens.end())
 				return false;
-			if (token->second == 'a') // am
+			switch (token->second) {
+			case 0:
+				break;
+			case 'a': // am
 				ampm = 0;
-			else if (token->second == 'p') // pm
+				break;
+			case 'p': // pm
 				ampm = 1;
-			else if (token->second > 0) // month
+				break;
+			case 'z':
+				if (have_tz) {
+					return false;
+				}
+				have_tz = true;
+				break;
+			default: // month
 				mm = token->second;
+			}
 		}
 	}
 

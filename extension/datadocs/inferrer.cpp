@@ -714,7 +714,7 @@ public:
 };
 
 static const std::unordered_map<std::string, char> _dt_tokens {
-	{"utc", 'Z'}, {"gmt", 'Z'},
+	{"utc", 'Z'}, {"gmt", 'Z'}, {"z", 'z'},
 	{"am", 'p'}, {"pm", 'p'},
 	{"sunday", 'a'}, {"monday", 'a'}, {"tuesday", 'a'}, {"wednesday", 'a'}, {"thursday", 'a'}, {"friday", 'a'}, {"saturday", 'a'},
 	{"sun", 'a'}, {"mon", 'a'}, {"tue", 'a'}, {"wed", 'a'}, {"thu", 'a'}, {"fri", 'a'}, {"sat", 'a'},
@@ -723,7 +723,7 @@ static const std::unordered_map<std::string, char> _dt_tokens {
 };
 
 // time | number | word | non-word
-static const std::regex _re_dt_components(R"((\d{1,2}\s*:\s*\d\d(?:\s*:\s*\d\d(?:[.,]\d{1,6})?)?(?!\d))|(\d+)|[a-zA-Z]+|[^\da-zA-Z]+)");
+static const std::regex _re_dt_components(R"((\d{1,2}\s*:\s*\d\d(\s*:\s*\d\d(?:[.,]\d{1,6})?)?(?!\d))|(\d+)|[a-zA-Z]+|[^\da-zA-Z]+)");
 
 // substitute all numbers in time with corresponding format codes
 static void _build_time_format(std::string& fmt_s, const std::ssub_match& m)
@@ -754,18 +754,19 @@ public:
 
 		int where_hour = -1; // position of 'H' in fmt_s
 		int where_year = -1; // if found definite year token - how many d/m/y placeholders were found before it
-		bool have_ampm = false, have_month = false;
+		bool have_ampm = false, have_month = false, have_tz = false;
 		// separate time, numbers, words and delimiters, time is H:MM[:SS[.FFFFFF]]
 		for (std::sregex_iterator m(input_string.begin(), input_string.end(), _re_dt_components); m != std::sregex_iterator(); ++m)
 		{
-			if ((*m)[2].matched) // token is number
+			if ((*m)[3].matched) // token is number
 			{
 				int lng = (int)m->length();
-				if ((lng == 4 || lng == 6) && m->position() > 0 && (c = input_string[m->position() - 1], c == '+' || c == '-') && // may be timezone offset -0100
-						!(lng == 4 && std::stoi(m->str()) > 1500)) // though it also may be year. Limit offset to 1500 in the hopes that Samoa or Kiribati won't shift further east.
+				if ((lng == 4 || lng == 6) && where_hour >= 0 && (c = input_string[m->position() - 1], c == '+' || c == '-') && // may be timezone offset -0100
+						!(lng == 4 && std::stoi(m->str()) > 1500) && !have_tz) // though it also may be year. Limit offset to 1500 in the hopes that Samoa or Kiribati won't shift further east.
 				{
 					fmt_s.back() = '%'; // instead of previous '+|-'
 					fmt_s += 'z';
+					have_tz = true;
 				}
 				else
 				{
@@ -796,10 +797,16 @@ public:
 			}
 			else if ((*m)[1].matched) // valid time sequence, encode as 't'
 			{
-				if (where_hour >= 0)
+				if (where_hour < 0) {
+					where_hour = (int)fmt_s.size() + 1; // first token to append is '%H'
+					_build_time_format(fmt_s, (*m)[0]);
+				} else if (!have_tz && !(*m)[2].matched && (c = input_string[m->position() - 1], c == '+' || c == '-')) {
+					fmt_s.back() = '%'; // instead of previous '+|-'
+					fmt_s += 'z';
+					have_tz = true;
+				} else {
 					return false;
-				where_hour = (int)fmt_s.size() + 1; // first token to append is '%H'
-				_build_time_format(fmt_s, (*m)[0]);
+				}
 			}
 			else
 			{
@@ -817,10 +824,21 @@ public:
 				}
 				else
 				{
-					if (new_s->second == 'p')
+					switch (new_s->second) {
+					case 'p':
 						have_ampm = true;
-					else if (new_s->second == 'b') // || new_s->second == 'B')
+						break;
+					case 'b':
 						have_month = true;
+						break;
+					case 'z':
+					case 'Z':
+						if (have_tz) {
+							return false;
+						}
+						have_tz = true;
+						break;
+					}
 					fmt_s += {'%', new_s->second};
 				}
 			}
@@ -934,17 +952,13 @@ public:
 			if (!m_unique_value.empty()) {
 				D_ASSERT(!m_formats.empty());
 				const std::string &fmt = m_formats[0];
-				if (fmt[0] != '%' || fmt[1] == '%') {
+				size_t sz = fmt.size();
+				if (sz < 2 || fmt[0] != '%' || fmt[1] == '%' || fmt[sz-2] != '%' || fmt[sz-1] == '%') {
 					return false;
 				}
-				size_t last_perc = 0, sz = fmt.size();
-				for (size_t i = 2; i < sz; ++i) {
-					if (fmt[i] == '%') {
-						last_perc = i;
-						i += 1;
-					}
-				}
-				if (fmt[last_perc + 1] == '%' || !(last_perc == sz - 2 || last_perc == sz - 3 && fmt[sz - 1] == 'Z')) {
+				size_t i = sz - 2;
+				for (; i > 0 && fmt[i - 1] == '%'; --i);
+				if ((sz - i) & 1) {
 					return false;
 				}
 			}
