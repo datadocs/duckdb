@@ -895,6 +895,7 @@ public:
 				m_formats.push_back(fmt_s);
 			m_have_time = true;
 		}
+		m_have_tz = have_tz;
 		return !m_formats.empty();
 	}
 
@@ -963,7 +964,7 @@ public:
 				}
 			}
 			if (m_have_date)
-				col.column_type = m_have_time ? ColumnType::Datetime : ColumnType::Date;
+				col.column_type = m_have_tz ? ColumnType::Datetime_tz : m_have_time ? ColumnType::Datetime : ColumnType::Date;
 			else
 				col.column_type = ColumnType::Time;
 			if (!m_formats.empty())
@@ -975,6 +976,7 @@ public:
 	bool m_valid = true;
 	bool m_have_time = false;
 	bool m_have_date = false;
+	bool m_have_tz = false;
 	std::vector<std::string> m_formats;
 	std::string m_unique_value;
 };
