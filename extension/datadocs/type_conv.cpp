@@ -507,7 +507,7 @@ static bool string_to_variant_date(const char* begin, const char* end, Value& va
 		
 	}
 	if (has_date) {
-		value = Value::TIMESTAMP(timestamp_t(micros));
+		value = have_tz ? Value::TIMESTAMPTZ(timestamp_t(micros)) : Value::TIMESTAMP(timestamp_t(micros));
 	} else {
 		value = Value::TIME(dtime_t(micros));
 	}

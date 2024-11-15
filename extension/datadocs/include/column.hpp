@@ -153,11 +153,18 @@ class IngestColTIMESTAMP : public IngestColDateBase {
 public:
 	using IngestColDateBase::IngestColDateBase, IngestColDateBase::Write;
 
+	IngestColTIMESTAMP(string name, idx_t &cur_row, string format, LogicalTypeId type_id) noexcept
+	    : IngestColDateBase(std::move(name), cur_row, std::move(format)), type(type_id) {
+	}
+
 	LogicalType GetType() const override {
-		return LogicalType::TIMESTAMP;
+		return type;
 	}
 	bool Write(string_t v) override;
 	bool WriteExcelDate(double v) override;
+
+protected:
+	const LogicalType type;
 };
 
 class IngestColINTERVAL : public IngestColBase {
@@ -327,13 +334,16 @@ struct IngestColChildrenMap {
 template <class T>
 typename T::ReturnType *BuildColumn(const IngestColumnDefinition &col, idx_t &cur_row) {
 	switch(col.column_type) {
-	case ColumnType::String  : return new typename T::template Type<IngestColVARCHAR>  (col.name, cur_row);
-	case ColumnType::Boolean : return new typename T::template Type<IngestColBOOLEAN>  (col.name, cur_row);
-	case ColumnType::Integer : return new typename T::template Type<IngestColBIGINT>   (col.name, cur_row);
-	case ColumnType::Decimal : return new typename T::template Type<IngestColDOUBLE>   (col.name, cur_row);
-	case ColumnType::Date    : return new typename T::template Type<IngestColDATE>     (col.name, cur_row, col.format);
-	case ColumnType::Time    : return new typename T::template Type<IngestColTIME>     (col.name, cur_row, col.format);
-	case ColumnType::Datetime: return new typename T::template Type<IngestColTIMESTAMP>(col.name, cur_row, col.format);
+	case ColumnType::String : return new typename T::template Type<IngestColVARCHAR>(col.name, cur_row);
+	case ColumnType::Boolean: return new typename T::template Type<IngestColBOOLEAN>(col.name, cur_row);
+	case ColumnType::Integer: return new typename T::template Type<IngestColBIGINT> (col.name, cur_row);
+	case ColumnType::Decimal: return new typename T::template Type<IngestColDOUBLE> (col.name, cur_row);
+	case ColumnType::Date   : return new typename T::template Type<IngestColDATE>   (col.name, cur_row, col.format);
+	case ColumnType::Time   : return new typename T::template Type<IngestColTIME>   (col.name, cur_row, col.format);
+	case ColumnType::Datetime:
+		return new typename T::template Type<IngestColTIMESTAMP>(col.name, cur_row, col.format, LogicalType::TIMESTAMP);
+	case ColumnType::Datetime_tz:
+		return new typename T::template Type<IngestColTIMESTAMP>(col.name, cur_row, col.format, LogicalType::TIMESTAMP_TZ);
 	case ColumnType::Interval:
 		if (col.format.empty()) {
 			return new typename T::template Type<IngestColINTERVAL>(col.name, cur_row);
