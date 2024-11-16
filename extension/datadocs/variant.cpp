@@ -1480,9 +1480,7 @@ bool VariantWriteValue(VectorWriter &result, Value v) {
 	}
 
 	case LogicalTypeId::BLOB: {
-		if (type == LogicalType::BLOB) {
-			return variant_writer.Process(result, VectorHolder(v.GetValueUnsafe<string_t>())[0]);
-		}
+		return variant_writer.Process(result, VectorHolder(v.GetValueUnsafe<string_t>())[0]);
 	}
 
 	default:
