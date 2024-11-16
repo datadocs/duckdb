@@ -549,6 +549,13 @@ static bool string_to_variant_inner(const char* begin, const char* end, Value& v
 		value = Value::BLOB_RAW(s);
 		return true;
 	}
+	string res;
+	if (wkt_to_bytes(begin, end, res) && begin == end)
+	{
+		value = Value::BLOB_RAW(res);
+		value.Reinterpret(DDGeoType);
+		return true;
+	}
 	return false;
 }
 

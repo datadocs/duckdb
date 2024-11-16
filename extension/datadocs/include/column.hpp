@@ -151,7 +151,7 @@ public:
 
 class IngestColTIMESTAMP : public IngestColDateBase {
 public:
-	using IngestColDateBase::IngestColDateBase, IngestColDateBase::Write;
+	using IngestColDateBase::Write;
 
 	IngestColTIMESTAMP(string name, idx_t &cur_row, string format, LogicalTypeId type_id) noexcept
 	    : IngestColDateBase(std::move(name), cur_row, std::move(format)), type(type_id) {
