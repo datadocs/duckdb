@@ -10,6 +10,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types/cast_helpers.hpp"
 #include "duckdb/common/operator/decimal_cast_operators.hpp"
+#include "json_common.hpp"
 
 #include "datadocs.hpp"
 #include "inferrer.h"
@@ -540,14 +541,22 @@ static bool string_to_variant_inner(const char* begin, const char* end, Value& v
 		return true;
 	if (length % 2 == 0 && begin[0] == '0' && begin[1] == 'x')
 	{
-		length = (length - 2) / 2;
 		string s;
-		s.resize(length);
+		s.resize((length - 2) / 2);
 		if (!string0x_to_bytes(begin + 2, end, s.data())) {
 			return false;
 		}
 		value = Value::BLOB_RAW(s);
 		return true;
+	}
+	if (*begin == '{' || *begin == '[') {
+		JSONAllocator alc {Allocator::DefaultAllocator()};
+		string_t s(begin, length);
+		if (JSONCommon::ReadDocumentUnsafe(s, JSONCommon::READ_FLAG, alc.GetYYAlc())) {
+			value = s;
+			value.Reinterpret(DDJsonType);
+			return true;
+		}
 	}
 	string res;
 	if (wkt_to_bytes(begin, end, res) && begin == end)
