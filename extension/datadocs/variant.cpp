@@ -1267,6 +1267,10 @@ public:
 
 bool VariantReadScalar(VectorWriter &result, yyjson_val *val, LogicalType type, bool is_list, yyjson_val *info) {
 	switch (type.id()) {
+	case LogicalType::BOOLEAN: {
+		return is_list ? VariantReaderBool().ReadList(result, val) : VariantReaderBool().ReadScalar(result, val);
+	}
+
 	case LogicalType::TINYINT:
 	case LogicalType::UTINYINT:
 	case LogicalType::SMALLINT:
