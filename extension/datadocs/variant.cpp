@@ -2215,8 +2215,11 @@ static bool VariantStructExtractImpl(VectorWriter &result, const VectorReader &a
 	JSONAllocator alc {Allocator::DefaultAllocator()};
 	auto arg_doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
 	auto arg_root = yyjson_doc_get_root(arg_doc);
-	auto info_doc = JSONCommon::ReadDocument(arg[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
-	auto info_root = yyjson_doc_get_root(info_doc);
+	yyjson_val *info_root = nullptr;
+	if (!arg[2].IsNull()) {
+		auto info_doc = JSONCommon::ReadDocument(arg[2].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+		info_root = yyjson_doc_get_root(info_doc);
+	}
 	if (yyjson_is_obj(arg_root)) {
 		size_t idx, max;
 		yyjson_val *k, *v;
@@ -2224,17 +2227,25 @@ static bool VariantStructExtractImpl(VectorWriter &result, const VectorReader &a
 		yyjson_obj_foreach(arg_root, idx, max, k, v) {
 			std::string kstr = yyjson_get_str(k);
 			if (key == StringUtil::Lower(kstr)) {
-				return VariantAccessWrite(result, arg, v, yyjson_obj_getn(info_root, key.data(), key.size()), alc);
+				yyjson_val *info = nullptr;
+				if (info_root) {
+					info = yyjson_obj_getn(info_root, key.data(), key.size());
+				}
+				return VariantAccessWrite(result, arg, v, info, alc);
 			}
 			candidates.push_back(kstr);
 		}
-		auto closest_settings = StringUtil::TopNLevenshtein(candidates, key);
-		auto message = StringUtil::CandidatesMessage(closest_settings, "Candidate Entries");
-		throw BinderException("Could not find key \"%s\" in variant struct\n%s", key, message);
-		return false;
+		result.SetNull();
+		return true;
+		// auto closest_settings = StringUtil::TopNLevenshtein(candidates, key);
+		// auto message = StringUtil::CandidatesMessage(closest_settings, "Candidate Entries");
+		// throw BinderException("Could not find key \"%s\" in variant struct\n%s", key, message);
+		// return false;
 	} else {
-		throw NotImplementedException("Specifier type not implemented");
-		return false;
+		result.SetNull();
+		return true;
+		// throw NotImplementedException("Specifier type not implemented");
+		// return false;
 	}
 	return false;
 }
@@ -3218,6 +3229,10 @@ static const std::vector<ScalarFunctionSet> GetVariantScalarFunctions() {
 	ScalarFunctionSet variant_struct_extract_set("struct_extract");
 	variant_struct_extract_set.AddFunction(vstructextractfun);
 	func_set.push_back(variant_struct_extract_set);
+
+	ScalarFunctionSet variant_json_extract_set("json_extract");
+	variant_json_extract_set.AddFunction(vstructextractfun);
+	func_set.push_back(variant_json_extract_set);
 
 	auto vtojsonfunc = ScalarFunction({DDVariantType}, DDJsonType, VariantToJsonFunc);
 	auto varraytojsonfunc = ScalarFunction({DDVariantArrayType}, DDJsonType, VariantToJsonFunc);
