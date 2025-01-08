@@ -183,6 +183,7 @@ static int CompareType(LogicalType type1, LogicalType type2) {
  */
 Value GetDecayVariantValue(Value v, yyjson_alc *alc) {
 	D_ASSERT(v.type() == DDVariantType);
+	if (v.IsNull()) return Value(LogicalType::SQLNULL);
 	auto &children = StructValue::GetChildren(v);
 	if (children.size() != 3) {
 		throw SyntaxException("Unimplemented decay value from variant %s", v.ToString());
@@ -575,7 +576,9 @@ static void CompareAnyVectorEachValue(Vector &left, Vector &right, Vector &resul
 		}
 		if ((v1_valid && v2_valid) || (v1_valid && IsDecayableType(left_type)) ||
 		    (v2_valid && IsDecayableType(right_type))) {
-			auto compare_value = CompareAnyValue(left.GetValue(i), right.GetValue(i), ci, keys_ci, ansi_nulls);
+			auto leftValue = left.GetValue(idx1);
+			auto rightValue = right.GetValue(idx2);
+			auto compare_value = CompareAnyValue(left.GetValue(idx1), right.GetValue(idx2), ci, keys_ci, ansi_nulls);
 			if (ansi_nulls && compare_value == COMPARISON_RS_IS_NULL) {
 				result_validity.SetInvalid(i);
 				continue;
