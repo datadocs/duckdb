@@ -165,12 +165,16 @@ void GeoFunctions::MakeLineArrayFunction(DataChunk &args, ExpressionState &state
 	Vector &input = args.data[0];
 	auto count = args.size();
 	result.SetVectorType(VectorType::CONSTANT_VECTOR);
+	string_t *result_entries;
+	ValidityMask result_validity;
 	if (input.GetVectorType() != VectorType::CONSTANT_VECTOR) {
 		result.SetVectorType(VectorType::FLAT_VECTOR);
+		result_entries = FlatVector::GetData<string_t>(result);
+		result_validity = FlatVector::Validity(result);
+	} else {
+		result_entries = ConstantVector::GetData<string_t>(result);
+		result_validity = ConstantVector::Validity(result);
 	}
-
-	auto result_entries = FlatVector::GetData<string_t>(result);
-	auto &result_validity = FlatVector::Validity(result);
 
 	auto list_size = ListVector::GetListSize(input);
 	auto &child_vector = ListVector::GetEntry(input);
