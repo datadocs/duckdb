@@ -2210,6 +2210,22 @@ static bool VariantListExtractImpl(VectorWriter &result, const VectorReader &arg
 	return false;
 }
 
+static bool VariantTypeImpl(VectorWriter &result, const VectorReader &arg) {
+	JSONAllocator alc {Allocator::DefaultAllocator()};
+	auto arg_doc = JSONCommon::ReadDocument(arg[1].Get<string_t>(), JSONCommon::READ_FLAG, alc.GetYYAlc());
+	auto arg_root = yyjson_doc_get_root(arg_doc);
+
+	auto doc = JSONCommon::CreateDocument(alc.GetYYAlc());
+	yyjson_mut_val *root = yyjson_val_mut_copy(doc, arg_root);
+	if (yyjson_mut_is_null(root)) {
+		result.SetNull();
+		return false;
+	}
+	std::string_view arg_type = arg[0].GetString();
+	result.SetString(string_t(arg_type.data(), arg_type.length()));
+	return true;
+}
+
 static bool VariantStructExtractImpl(VectorWriter &result, const VectorReader &arg, const VectorReader &index) {
 	std::string key = StringUtil::Lower(std::string(index.GetString()));
 	JSONAllocator alc {Allocator::DefaultAllocator()};
@@ -2365,6 +2381,11 @@ static bool VariantAccessKeyImpl(VectorWriter &result, const VectorReader &arg, 
 static void VariantAccessIndexFunc(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.data[0].GetType() == DDVariantType);
 	VectorExecute(args, result, VariantAccessIndexImpl);
+}
+
+static void VariantTypeFunc(DataChunk &args, ExpressionState &state, Vector &result) {
+	D_ASSERT(args.data[0].GetType() == DDVariantType);
+	VectorExecute(args, result, VariantTypeImpl);
 }
 
 static void VariantListExtractFunc(DataChunk &args, ExpressionState &state, Vector &result) {
@@ -3201,6 +3222,11 @@ static unique_ptr<FunctionData> SortHashBind(ClientContext &context, ScalarFunct
 
 static const std::vector<ScalarFunctionSet> GetVariantScalarFunctions() {
 	std::vector<ScalarFunctionSet> func_set {};
+
+	auto vtypefun = ScalarFunction({DDVariantType}, LogicalType::VARCHAR, VariantTypeFunc);
+	ScalarFunctionSet variant_type_set("variant_type");
+	variant_type_set.AddFunction(vtypefun);
+	func_set.push_back(variant_type_set);
 
 	auto vextractfun = ScalarFunction({DDVariantType, LogicalType::BIGINT}, DDVariantType, VariantListExtractFunc);
 	auto vstructextractfun =
