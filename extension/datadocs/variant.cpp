@@ -1553,6 +1553,13 @@ bool TryCastVariant(Vector source, Vector &result, idx_t &idx, CastParameters &p
 		}
 	} break;
 	case LogicalType::DATE:
+		if (IsDatetime(source_type) && source_type.id() != LogicalType::TIME &&
+		    source_type.id() != LogicalType::TIMESTAMP_TZ) {
+			result.SetValue(idx, val);
+			return true;
+		} else {
+			return VariantError(source_type, parameters.error_message, target);
+		}
 	case LogicalType::TIMESTAMP:
 	case LogicalType::TIMESTAMP_TZ: {
 		if (IsDatetime(source_type) && source_type.id() != LogicalType::TIME) {
