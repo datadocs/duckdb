@@ -3306,6 +3306,8 @@ static const void HandleCastFunction(DatabaseInstance &inst) {
 		const auto variant_to_target_cost = casts.ImplicitCastCost(DDVariantType, target_type);
 		casts.RegisterCastFunction(DDVariantType, target_type, VariantToAnyCastBind, variant_to_target_cost);
 	}
+	const auto variant_to_target_cost = casts.ImplicitCastCost(DDVariantType, DDGeoType);
+	casts.RegisterCastFunction(DDVariantType, DDGeoType, VariantToAnyCastBind, variant_to_target_cost);
 
 	auto any_to_variant_cost = casts.ImplicitCastCost(LogicalType::ANY, DDVariantType);
 	casts.RegisterCastFunction(DDJsonType, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
