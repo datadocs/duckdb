@@ -120,6 +120,10 @@ static ComparisonType LogicalTypeToComparisonType(LogicalType type) {
 		return ComparisonType::STRUCT;
 	}
 
+	case LogicalTypeId::SQLNULL: {
+		return ComparisonType::C_NULL;
+	}
+
 	default:
 		throw InternalException("Unimplemented comparison type for Logical Type %s", type.ToString());
 		break;
@@ -183,12 +187,15 @@ static int CompareType(LogicalType type1, LogicalType type2) {
  */
 Value GetDecayVariantValue(Value v, yyjson_alc *alc) {
 	D_ASSERT(v.type() == DDVariantType);
-	if (v.IsNull()) return Value(LogicalType::SQLNULL);
+	if (v.IsNull())
+		return Value(LogicalType::SQLNULL);
 	auto &children = StructValue::GetChildren(v);
 	if (children.size() != 3) {
 		throw SyntaxException("Unimplemented decay value from variant %s", v.ToString());
 		return Value(LogicalType::SQLNULL);
 	}
+	if (children[1].IsNull())
+		return Value(LogicalType::SQLNULL);
 	yyjson_val *info = nullptr;
 	LogicalType child_type;
 	auto doc = JSONCommon::ReadDocument(children[1].GetValueUnsafe<string_t>(), JSONCommon::READ_FLAG, alc);
@@ -384,8 +391,8 @@ static int CompareAnyValue(Value v1, Value v2, bool ci, bool keys_ci, bool ansi_
 					if (key1 != key2) {
 						return key1 > key2 ? COMPARISON_RS_BIGGER : COMPARISON_RS_LESS;
 					}
-					compare_value =
-					    CompareAnyValue(values1[key_idx_map1[key1]], values2[key_idx_map2[key2]], ci, keys_ci, ansi_nulls);
+					compare_value = CompareAnyValue(values1[key_idx_map1[key1]], values2[key_idx_map2[key2]], ci,
+					                                keys_ci, ansi_nulls);
 					if (compare_value != COMPARISON_RS_EQUAL) {
 						break;
 					}
@@ -405,7 +412,8 @@ static int CompareAnyValue(Value v1, Value v2, bool ci, bool keys_ci, bool ansi_
 		Value new_v2 = v2;
 		bool v1_isnull = v1.IsNull();
 		bool v2_isnull = v2.IsNull();
-		if (ansi_nulls && (v1_isnull || v2_isnull)) return COMPARISON_RS_IS_NULL;
+		if (ansi_nulls && (v1_isnull || v2_isnull))
+			return COMPARISON_RS_IS_NULL;
 		if (v1_isnull && v2_isnull) {
 			return COMPARISON_RS_EQUAL;
 		} else if (v1_isnull || v2_isnull) {
@@ -454,7 +462,8 @@ struct CompareAny {
  * @param count
  */
 template <class T, class OP>
-static inline void TemplatedCompareAnyExecute(Vector &left, Vector &right, Vector &result, idx_t count, bool ansi_nulls) {
+static inline void TemplatedCompareAnyExecute(Vector &left, Vector &right, Vector &result, idx_t count,
+                                              bool ansi_nulls) {
 	auto ldata = FlatVector::GetData<T>(left);
 	auto rdata = FlatVector::GetData<T>(right);
 	auto left_vector_type = left.GetVectorType();
@@ -557,7 +566,8 @@ static void CompareAnyBaseVectors(Vector &left, Vector &right, Vector &result, i
  * @param ci
  * @param keys_ci
  */
-static void CompareAnyVectorEachValue(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci, bool ansi_nulls) {
+static void CompareAnyVectorEachValue(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci,
+                                      bool ansi_nulls) {
 	UnifiedVectorFormat vdata1, vdata2;
 	left.ToUnifiedFormat(count, vdata1);
 	right.ToUnifiedFormat(count, vdata2);
@@ -642,7 +652,8 @@ static void CompareAnyVectorsType(Vector &left, Vector &right, Vector &result, i
  * @param ci
  * @param keys_ci
  */
-static void CompareAnyNestedVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci, bool ansi_nulls) {
+static void CompareAnyNestedVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci,
+                                    bool ansi_nulls) {
 	auto type1 = left.GetType();
 	auto type2 = right.GetType();
 	if (type1.id() != type2.id()) {
@@ -708,9 +719,9 @@ static void CompareAnyNestedVectors(Vector &left, Vector &right, Vector &result,
 						result_data[i] = key1 > key2 ? COMPARISON_RS_BIGGER : COMPARISON_RS_LESS;
 						break;
 					}
-					result_data[i] =
-					    CompareAnyValue(left_children_vec[key_idx_map1[key1]]->GetValue(idx1),
-					                    right_children_vec[key_idx_map2[key2]]->GetValue(idx2), ci, keys_ci, ansi_nulls);
+					result_data[i] = CompareAnyValue(left_children_vec[key_idx_map1[key1]]->GetValue(idx1),
+					                                 right_children_vec[key_idx_map2[key2]]->GetValue(idx2), ci,
+					                                 keys_ci, ansi_nulls);
 					if (ansi_nulls && result_data[i] == COMPARISON_RS_IS_NULL) {
 						result_validity.SetInvalid(i);
 						break;
@@ -749,7 +760,8 @@ static void CompareAnyNestedVectors(Vector &left, Vector &right, Vector &result,
  * @param ci
  * @param keys_ci
  */
-static void CompareAnyVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci, bool ansi_nulls) {
+static void CompareAnyVectors(Vector &left, Vector &right, Vector &result, idx_t count, bool ci, bool keys_ci,
+                              bool ansi_nulls) {
 	auto type1 = left.GetType();
 	auto type2 = right.GetType();
 	if (left.GetVectorType() == VectorType::CONSTANT_VECTOR && right.GetVectorType() == VectorType::CONSTANT_VECTOR) {
@@ -812,7 +824,8 @@ static void CompareAnyFunction(DataChunk &args, ExpressionState &state, Vector &
 	if (count > 0) {
 		ci = vdata3.validity.RowIsValid(0) ? ci_vec.GetValue(0).GetValue<bool>() : ci_default_value;
 		keys_ci = vdata4.validity.RowIsValid(0) ? keys_ci_vec.GetValue(0).GetValue<bool>() : keys_ci_default_value;
-		ansi_nulls = vdata5.validity.RowIsValid(0) ? ansi_nulls_vec.GetValue(0).GetValue<bool>() : ansi_nulls_default_value;
+		ansi_nulls =
+		    vdata5.validity.RowIsValid(0) ? ansi_nulls_vec.GetValue(0).GetValue<bool>() : ansi_nulls_default_value;
 	}
 
 	CompareAnyVectors(first_operand, second_operand, result, count, ci, keys_ci, ansi_nulls);
@@ -1243,7 +1256,7 @@ static bool ComparisonBind(ClientContext &context, vector<unique_ptr<Expression>
 		}
 	}
 	vector<unique_ptr<Expression>> option_arguments(3);
-	std::vector<bool> default_value{ci_default_value, keys_ci_default_value, ansi_nulls_default_value};
+	std::vector<bool> default_value {ci_default_value, keys_ci_default_value, ansi_nulls_default_value};
 	for (idx_t i = 0; i < 3; i++) {
 		auto iter = arguments_maps.find(ComparisonArgumentType(i));
 		if (iter != arguments_maps.end()) {
