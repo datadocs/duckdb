@@ -9,7 +9,7 @@
 # Usage: build-duckdb-for-datadocs.sh [debug|cldebug|release|...] [--shell]
 #
 # Author:  Liu Yue @hangxingliu
-# Version: 2024-04-10
+# Version: 2025-04-02
 #
 # Required Softwares:
 #
@@ -39,8 +39,11 @@
 #        export HTTPS_PROXY=http://127.0.0.1:8888
 #
 throw() { echo -e "fatal: $1" >&2; exit 1; }
-execute() { echo "$ $*"; "$@" || throw "Failed to execute '$1'"; }
+print_cmd() { printf "\$ %s\n" "$*" >&2; }
+execute() { print_cmd "$@"; "$@" || throw "Failed to execute '$1'"; }
 
+# this relative path is based on the root of the project
+log_file="./scripts/logs/build-$(date "+%Y%m%d-%H%M").log"; 
 open_duckdb_shell=
 make_target=()
 parse_args() {
@@ -58,26 +61,48 @@ parse_args "$@";
 
 command -v cmake >/dev/null || throw "cmake is not installed!";
 command -v ninja >/dev/null || throw "ninja is not installed!";
-command -v clang >/dev/null || throw "clang is not installed!";
-command -v clang++ >/dev/null || throw "clang++ is not installed!";
+
+# Using Clang as the compiler
+if [ -z "$CC" ]; then
+    CLANG="$(command -v clang)";
+    [ -z "$CLANG" ] && CLANG="$(command -v clang-19)";
+    [ -z "$CLANG" ] && CLANG="$(command -v clang-18)";
+    [ -z "$CLANG" ] && throw "clang is not found!";
+    execute export CC="${CLANG}"
+fi
+if [ -z "$CXX" ]; then
+    CLANG="$(command -v clang++)";
+    [ -z "$CLANG" ] && CLANG="$(command -v clang++-19)";
+    [ -z "$CLANG" ] && CLANG="$(command -v clang++-18)";
+    [ -z "$CLANG" ] && throw "clang++ is not found!";
+    execute export CXX="${CLANG}"
+fi
 
 pushd "$( dirname -- "${BASH_SOURCE[0]}" )/.." >/dev/null || exit 1;
+execute mkdir -p "$(dirname -- "${log_file}")";
 
 # Build the following extension
 execute export BUILD_AUTOCOMPLETE=1;  # for the auto-completion feature in REPL 
 execute export BUILD_JSON=1;          # it is a dependency of Datadocs extension
 execute export BUILD_DATADOCS=1;
 
-# Using Clang as the compiler
-execute export CC="$(command -v clang)"
-execute export CXX="$(command -v clang++)"
-
 # https://cmake.org/cmake/help/latest/envvar/CMAKE_BUILD_PARALLEL_LEVEL.html
 # execute export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)";
 
 SECONDS=0
+
 execute export GEN=ninja;
-execute make "-j$(nproc)" "${make_target[@]}";
+printf "\n  log file: %s\n\n" "$log_file";
+
+make_cmd=( make "-j$(nproc)" "${make_target[@]}" );
+print_cmd "${make_cmd[@]}" | tee "${log_file}";
+"${make_cmd[@]}" 2>&1 | tee -a "${log_file}";
+
+exitcode="${PIPESTATUS[0]}"
+if [ "$exitcode" != 0 ]; then
+    printf "\n  log file: %s\n\n" "$log_file";
+    throw "Failed to build";
+fi
 
 echo "";
 echo "build done: +${SECONDS}s"
