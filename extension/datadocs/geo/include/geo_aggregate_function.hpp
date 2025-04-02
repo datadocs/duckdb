@@ -308,10 +308,18 @@ template <class STATE, class A_TYPE, class B_TYPE, class C_TYPE, class RESULT_TY
 static void TernaryWindow(AggregateInputData &aggr_input_data, const WindowPartitionInput &partition,
                           const_data_ptr_t g_state, data_ptr_t l_state, const SubFrames &subframes, Vector &result,
                           idx_t rid) {
-	D_ASSERT(partition.input_count == 3);
+	D_ASSERT(partition.inputs);
+	const auto &inputs = *partition.inputs;
+	D_ASSERT(inputs.ColumnCount() == 3);
+	DataChunk page;
+	inputs.FetchChunk(0, page);
+	auto a = page.data[0];
+	inputs.FetchChunk(1, page);
+	auto b = page.data[0];
+	inputs.FetchChunk(2, page);
+	auto c = page.data[0];
 	GeoAggregateExecutor::TernaryWindow<STATE, A_TYPE, B_TYPE, C_TYPE, RESULT_TYPE, OP>(
-	    partition.inputs[0], partition.inputs[1], partition.inputs[2], partition.filter_mask,
-		aggr_input_data, l_state, subframes, result, rid, g_state);
+	    a, b, c, partition.filter_mask, aggr_input_data, l_state, subframes, result, rid, g_state);
 }
 
 unique_ptr<FunctionData> BindGeometryClusterDBScan(ClientContext &context, AggregateFunction &function,

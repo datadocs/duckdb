@@ -29,7 +29,7 @@ typedef void (*bitwise_operator_t)(const string_t &, const string_t &, string_t 
  * @brief Define function type for bitwise shift operators for bytes type like shift left (<<) and shift right (>>)
  * second parameter is number of bit need to shift
  */
-typedef void (*bitwise_shift_opeartor_t)(const string_t &, const idx_t &, string_t &);
+typedef void (*bitwise_shift_opeartor_t)(const bitstring_t &, idx_t, bitstring_t &);
 
 /**
  * @brief Define types of operators for any type
@@ -1088,8 +1088,8 @@ unique_ptr<Expression> CreateBoundAddSubtractFuncExpression(ClientContext &conte
 	func_arguments.push_back(std::move(arguments[1]));
 	func_arguments.push_back(std::move(arguments[2]));
 	auto is_add_func = op_type == OperatorType::ADD_OPERATOR;
-	auto add_subtract_function =
-	    is_add_func ? AddFun::GetFunction(left_type, right_type) : SubtractFun::GetFunction(left_type, right_type);
+	auto add_subtract_function = is_add_func ? AddFunction::GetFunction(left_type, right_type)
+	                                         : SubtractFunction::GetFunction(left_type, right_type);
 	if ((left_type.id() == LogicalTypeId::DECIMAL || right_type.id() == LogicalTypeId::DECIMAL) &&
 	    add_subtract_function.function == nullptr) {
 		if (left_type.InternalType() == PhysicalType::INT128) {
