@@ -21,6 +21,7 @@
 
 #include <array>
 #include <cassert>
+#include <cstdint>
 #include <geos/export.hpp>
 #include <geos/geom/Location.hpp>
 #include <geos/geom/Position.hpp>
