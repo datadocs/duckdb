@@ -20,6 +20,7 @@
 #pragma once
 
 #include <cassert>
+#include <cstdint>
 #include <geos/export.hpp>
 #include <geos/geom/Location.hpp>
 #include <geos/geomgraph/TopologyLocation.hpp>
