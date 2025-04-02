@@ -13,6 +13,7 @@
 #include "duckdb/function/cast/cast_function_set.hpp"
 #include "duckdb/function/scalar/nested_functions.hpp"
 #include "duckdb/function/scalar/string_functions.hpp"
+#include "duckdb/function/scalar/string_common.hpp"
 #include "duckdb/main/extension_util.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -1064,7 +1065,7 @@ public:
 		date_t res;
 		idx_t pos;
 		bool special;
-		if (!Date::TryConvertDate(str_val, strlen(str_val), pos, res, special, true) ||
+		if (Date::TryConvertDate(str_val, strlen(str_val), pos, res, special, true) != DateCastResult::SUCCESS ||
 		    res.days == std::numeric_limits<int32_t>::max() || res.days <= -std::numeric_limits<int32_t>::max()) {
 			return false;
 		}
@@ -2176,7 +2177,7 @@ static bool VariantListExtractImpl(VectorWriter &result, const VectorReader &arg
 	if (yyjson_is_str(arg_root)) {
 		auto input_str = string_t(unsafe_yyjson_get_str(arg_root));
 		Vector res(LogicalType::VARCHAR);
-		auto str = SubstringFun::SubstringUnicode(res, string_t(unsafe_yyjson_get_str(arg_root)), idx, 1);
+		auto str = SubstringUnicode(res, string_t(unsafe_yyjson_get_str(arg_root)), idx, 1);
 		auto doc = JSONCommon::CreateDocument(alc.GetYYAlc());
 		auto root = yyjson_mut_strn(doc, str.GetData(), (size_t)str.GetSize());
 		if (yyjson_mut_is_null(root)) {
@@ -2336,8 +2337,7 @@ static bool VariantListSliceImpl(VectorWriter &result, const VectorReader &arg, 
 			return false;
 		}
 		Vector res(LogicalType::VARCHAR);
-		auto str = SubstringFun::SubstringUnicode(res, string_t(unsafe_yyjson_get_str(arg_root)), begin_idx + 1,
-		                                          end_idx - begin_idx);
+		auto str = SubstringUnicode(res, string_t(unsafe_yyjson_get_str(arg_root)), begin_idx + 1, end_idx - begin_idx);
 		auto root = yyjson_mut_strn(doc, str.GetData(), (size_t)str.GetSize());
 		if (yyjson_mut_is_null(root)) {
 			return false;

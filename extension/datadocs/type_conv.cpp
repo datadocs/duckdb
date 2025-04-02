@@ -505,10 +505,10 @@ static bool string_to_variant_date(const char* begin, const char* end, Value& va
 		} else if (micros < 0) {
 			micros = micros % Interval::MICROS_PER_DAY + Interval::MICROS_PER_DAY;
 		}
-		
+
 	}
 	if (has_date) {
-		value = have_tz ? Value::TIMESTAMPTZ(timestamp_t(micros)) : Value::TIMESTAMP(timestamp_t(micros));
+		value = have_tz ? Value::TIMESTAMPTZ(timestamp_tz_t(micros)) : Value::TIMESTAMP(timestamp_t(micros));
 	} else {
 		value = Value::TIME(dtime_t(micros));
 	}

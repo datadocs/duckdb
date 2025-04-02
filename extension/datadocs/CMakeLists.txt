@@ -151,6 +151,7 @@ add_definitions(-DRAPIDJSON_HAS_STDSTRING=1)
 target_include_directories(datadocs_extension
 	PRIVATE include
 	PRIVATE geo/include
+  PRIVATE ../core_functions/include
 	PRIVATE ../json/include
 	PRIVATE ../json/yyjson/include
   PRIVATE ../../../rapidjson/include
