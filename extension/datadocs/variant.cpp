@@ -18,8 +18,11 @@
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/function/cast/bound_cast_data.hpp"
+#include "duckdb/function/cast/vector_cast_helpers.hpp"
 #include "fmt/format.h"
 #include "geometry.hpp"
+#include "geo-functions.hpp"
 #include "json_common.hpp"
 #include "json_functions.hpp"
 #include "json_transform.hpp"
@@ -54,6 +57,15 @@ string ToLowerCase(string str) {
 	string result = str;
 	std::transform(str.begin(), str.end(), result.begin(), [](unsigned char c) { return std::tolower(c); });
 	return result;
+}
+
+static LogicalType InitVarcharStructType(const LogicalType &target) {
+	child_list_t<LogicalType> child_types;
+	for (auto &child : StructType::GetChildTypes(target)) {
+		child_types.push_back(make_pair(child.first, LogicalType::VARCHAR));
+	}
+
+	return LogicalType::STRUCT(child_types);
 }
 
 LogicalType DDGeoType;
@@ -1521,6 +1533,19 @@ bool TryCastVariant(Vector source, Vector &result, idx_t &idx, CastParameters &p
 		result.SetValue(idx, Value(tempVal));
 		return true;
 	} break;
+	case LogicalType::BOOLEAN: {
+		if (source_type.IsNumeric()) {
+			bool cast_val = Cast::Operation<int64_t, bool>(val.GetValue<int64_t>());
+			result.SetValue(idx, Value::BOOLEAN(cast_val));
+			return true;
+		} else if (source_type.id() == LogicalType::VARCHAR) {
+			bool cast_val = Cast::Operation<string_t, bool>(val.GetValueUnsafe<string_t>());
+			result.SetValue(idx, Value::BOOLEAN(cast_val));
+			return true;
+		} else {
+			return VariantError(source_type, parameters.error_message, target);
+		}
+	} break;
 	case LogicalType::TINYINT:
 	case LogicalType::UTINYINT:
 	case LogicalType::SMALLINT:
@@ -1532,6 +1557,10 @@ bool TryCastVariant(Vector source, Vector &result, idx_t &idx, CastParameters &p
 		if (source_type.IsNumeric()) {
 			result.SetValue(idx, Value::Numeric(target, val.GetValue<int64_t>()));
 			return true;
+		} else if (source_type.id() == LogicalType::VARCHAR) {
+			int64_t cast_val = Cast::Operation<string_t, int64_t>(val.GetValueUnsafe<string_t>());
+			result.SetValue(idx, Value::DOUBLE(cast_val));
+			return true;
 		} else {
 			return VariantError(source_type, parameters.error_message, target);
 		}
@@ -1541,6 +1570,10 @@ bool TryCastVariant(Vector source, Vector &result, idx_t &idx, CastParameters &p
 		if (source_type.IsNumeric()) {
 			result.SetValue(idx, Value(val.GetValue<double>()));
 			return true;
+		} else if (source_type.id() == LogicalType::VARCHAR) {
+			double cast_val = Cast::Operation<string_t, double>(val.GetValueUnsafe<string_t>());
+			result.SetValue(idx, Value::DOUBLE(cast_val));
+			return true;
 		} else {
 			return VariantError(source_type, parameters.error_message, target);
 		}
@@ -1549,22 +1582,35 @@ bool TryCastVariant(Vector source, Vector &result, idx_t &idx, CastParameters &p
 		if (source_type.IsNumeric()) {
 			result.SetValue(idx, val);
 			return true;
-		} else {
-			return VariantError(source_type, parameters.error_message, target);
-		}
-	} break;
-	case LogicalType::DATE:
-		if (IsDatetime(source_type) && source_type.id() != LogicalType::TIME &&
-		    source_type.id() != LogicalType::TIMESTAMP_TZ) {
-			result.SetValue(idx, val);
+		} else if (source_type.id() == LogicalType::VARCHAR) {
+			double cast_val = Cast::Operation<string_t, double>(val.GetValueUnsafe<string_t>());
+			result.SetValue(idx, Value::DOUBLE(cast_val));
 			return true;
 		} else {
 			return VariantError(source_type, parameters.error_message, target);
 		}
+	} break;
+	case LogicalType::DATE: {
+		if (IsDatetime(source_type) && source_type.id() != LogicalType::TIME &&
+		    source_type.id() != LogicalType::TIMESTAMP_TZ) {
+			result.SetValue(idx, val);
+			return true;
+		} else if (source_type.id() == LogicalType::VARCHAR) {
+			date_t cast_val = Cast::Operation<string_t, date_t>(val.GetValueUnsafe<string_t>());
+			result.SetValue(idx, Value::DATE(cast_val));
+			return true;
+		} else {
+			return VariantError(source_type, parameters.error_message, target);
+		}
+	} break;
 	case LogicalType::TIMESTAMP:
 	case LogicalType::TIMESTAMP_TZ: {
 		if (IsDatetime(source_type) && source_type.id() != LogicalType::TIME) {
 			result.SetValue(idx, val);
+			return true;
+		} else if (source_type.id() == LogicalType::VARCHAR) {
+			timestamp_t cast_val = Cast::Operation<string_t, timestamp_t>(val.GetValueUnsafe<string_t>());
+			result.SetValue(idx, Value::TIMESTAMP(cast_val));
 			return true;
 		} else {
 			return VariantError(source_type, parameters.error_message, target);
@@ -1573,6 +1619,10 @@ bool TryCastVariant(Vector source, Vector &result, idx_t &idx, CastParameters &p
 	case LogicalType::TIME: {
 		if (IsDatetime(source_type) && source_type.id() != LogicalType::DATE) {
 			result.SetValue(idx, val);
+			return true;
+		} else if (source_type.id() == LogicalType::VARCHAR) {
+			dtime_t cast_val = Cast::Operation<string_t, dtime_t>(val.GetValueUnsafe<string_t>());
+			result.SetValue(idx, Value::TIME(cast_val));
 			return true;
 		} else {
 			return VariantError(source_type, parameters.error_message, target);
@@ -1584,12 +1634,54 @@ bool TryCastVariant(Vector source, Vector &result, idx_t &idx, CastParameters &p
 		if (source_type == target) {
 			result.SetValue(idx, val);
 			return true;
+		} else if (source_type.id() == LogicalType::VARCHAR) {
+			if (target.id() == LogicalType::BLOB) {
+				if (target.GetAlias() == DDGeoType.GetAlias()) {
+					Vector source_vec(source, i_row, i_row + 1);
+					Vector result_vec(target, 1);
+					bool res = false;
+					try {
+						res = GeoFunctions::CastVarcharToGEO(source_vec, result_vec, 1, parameters);
+					} catch (const std::exception &e) {
+						return VariantError(source_type, parameters.error_message, target);
+					}
+
+					if (!res) {
+						return false;
+					}
+					result.SetValue(idx, result_vec.GetValue(0));
+				} else {
+					result.SetValue(idx, Value::BLOB(val.GetValueUnsafe<string_t>().GetString()));
+				}
+			} else {
+				string_t input_str = val.GetValueUnsafe<string_t>();
+				interval_t cast_val;
+				auto res = Interval::FromCString(input_str.GetData(), input_str.GetSize(), cast_val,
+				                                 parameters.error_message, parameters.strict);
+				if (!res) {
+					return VariantError(source_type, parameters.error_message, target);
+				}
+				result.SetValue(idx, Value::INTERVAL(cast_val));
+			}
+			return true;
 		} else {
 			return VariantError(source_type, parameters.error_message, target);
 		}
 	} break;
 	case LogicalTypeId::LIST: {
-
+		if (source_type.id() == LogicalType::VARCHAR) {
+			Vector source_vec(source, i_row, i_row + 1);
+			Vector result_vec(target, 1);
+			auto &source_mask = FlatVector::Validity(source_vec);
+			auto &result_mask = FlatVector::Validity(result_vec);
+			auto source_data = ConstantVector::GetData<string_t>(source_vec);
+			if (!VectorStringToList::StringToNestedTypeCastLoop(source_data, source_mask, result_vec, result_mask, 1,
+			                                                    parameters, nullptr)) {
+				return false;
+			}
+			result.SetValue(idx, result_vec.GetValue(0));
+			return true;
+		}
 	} break;
 	case LogicalTypeId::STRUCT: {
 		if (target.GetAlias() == VARIANT_TYPE_NAME) {
@@ -1601,6 +1693,24 @@ bool TryCastVariant(Vector source, Vector &result, idx_t &idx, CastParameters &p
 			if (reader.IsNull() || !variant_writer.Process(writer, reader)) {
 				writer.SetNull();
 			}
+		} else if (source_type.id() == LogicalType::VARCHAR) {
+			Vector source_vec(source, i_row, i_row + 1);
+			Vector result_vec(target, 1);
+			auto &source_mask = FlatVector::Validity(source_vec);
+			auto &result_mask = FlatVector::Validity(result_vec);
+			auto source_data = ConstantVector::GetData<string_t>(source_vec);
+			if (!VectorStringToStruct::StringToNestedTypeCastLoop(source_data, source_mask, result_vec, result_mask, 1,
+			                                                      parameters, nullptr)) {
+				return false;
+			}
+
+			auto &source_child_vectors = StructVector::GetEntries(result_vec);
+			auto &child_vectors = StructVector::GetEntries(result);
+			auto result_child_types = StructType::GetChildTypes(target);
+			for (idx_t i = 0; i < result_child_types.size(); i++) {
+				child_vectors[i]->SetValue(idx, source_child_vectors[i]->GetValue(0));
+			}
+			return true;
 		} else {
 			if (source_type.id() != LogicalTypeId::STRUCT) {
 				return VariantError(source_type, parameters.error_message, target);
@@ -1934,6 +2044,9 @@ static bool TransformVariantInternal(yyjson_val *vals[], Vector &result, const i
 static bool TransformVariantArray(yyjson_val *arrays[], yyjson_alc *alc, Vector &result, const idx_t count,
                                   JSONTransformOptions &options, vector<LogicalType> infos, CastParameters &parameters,
                                   vector<yyjson_val *> extra_infos) {
+	if (infos.size() == 1 && infos[0].id() == LogicalTypeId::VARCHAR) {
+		return TransformVariantInternal(arrays, result, count, options, infos, parameters, extra_infos);
+	}
 	bool success = true;
 
 	// Initialize list vector
@@ -2006,6 +2119,9 @@ static bool TransformVariantArray(yyjson_val *arrays[], yyjson_alc *alc, Vector 
 static bool TransformVariantObjectInternal(yyjson_val *objects[], yyjson_alc *alc, Vector &result, const idx_t count,
                                            JSONTransformOptions &options, vector<LogicalType> infos,
                                            CastParameters &parameters, vector<yyjson_val *> extra_infos) {
+	if (infos.size() == 1 && infos[0].id() == LogicalTypeId::VARCHAR) {
+		return TransformVariantInternal(objects, result, count, options, infos, parameters, extra_infos);
+	}
 	// Set validity first
 	auto &result_validity = FlatVector::Validity(result);
 	for (idx_t i = 0; i < count; i++) {
@@ -3160,6 +3276,16 @@ static void VariantFromSortHash(DataChunk &args, ExpressionState &state, Vector 
 	                                                     FromVariantListFunc<VariantReader##C_NAME>));
 
 BoundCastInfo VariantToAnyCastBind(BindCastInput &input, const LogicalType &source, const LogicalType &target) {
+	if (target.id() == LogicalTypeId::STRUCT && target.GetAlias() != VARIANT_TYPE_NAME) {
+		return BoundCastInfo(VariantCasts::VariantCastAny,
+		                     StructBoundCastData::BindStructToStructCast(input, InitVarcharStructType(target), target),
+		                     JSONFunctionLocalState::InitCastLocalState);
+	} else if (target.id() == LogicalTypeId::LIST) {
+		return BoundCastInfo(VariantCasts::VariantCastAny,
+		                     ArrayBoundCastData::BindArrayToArrayCast(
+		                         input, LogicalType::ARRAY(LogicalType::VARCHAR, optional_idx()), target),
+		                     JSONFunctionLocalState::InitCastLocalState);
+	}
 	return BoundCastInfo(VariantCasts::VariantCastAny, nullptr, JSONFunctionLocalState::InitCastLocalState);
 }
 
@@ -3308,6 +3434,7 @@ static const void HandleCastFunction(DatabaseInstance &inst) {
 	}
 	const auto variant_to_target_cost = casts.ImplicitCastCost(DDVariantType, DDGeoType);
 	casts.RegisterCastFunction(DDVariantType, DDGeoType, VariantToAnyCastBind, variant_to_target_cost);
+	casts.RegisterCastFunction(DDVariantType, DDJsonType, VariantToAnyCastBind, variant_to_target_cost);
 
 	auto any_to_variant_cost = casts.ImplicitCastCost(LogicalType::ANY, DDVariantType);
 	casts.RegisterCastFunction(DDJsonType, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
@@ -3335,6 +3462,7 @@ static const void HandleCastFunction(DatabaseInstance &inst) {
 			source_type = type;
 		}
 		casts.RegisterCastFunction(source_type, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
+		casts.RegisterCastFunction(DDGeoType, DDVariantType, AnyToVariantCastBind, any_to_variant_cost);
 		casts.RegisterCastFunction(source_type, DDVariantArrayType, AnyToVariantArrayCastBind,
 		                           any_to_variant_array_cost);
 	}
