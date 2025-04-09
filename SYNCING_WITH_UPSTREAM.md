@@ -1,6 +1,6 @@
 ---
 author: hangxingliu
-updated_at: 2025-04-03 19:12:46
+updated_at: 2025-04-09 22:00:50
 ---
 # Syncing with Upstream
 
@@ -35,7 +35,7 @@ git remote add upstream https://github.com/duckdb/duckdb.git
 
 Then, please update your local git history from the upstream repo:
 
-```
+```bash
 git fetch upstream
 ```
 
@@ -48,7 +48,7 @@ LAST_VER="v1.2.1"
 
 # The new version you want to sync from the upstream repo. 
 # Any branch name or tag name in upstream repo can be used here: (e.g., "main")
-NEW_VERSION="v1.2.2"
+NEW_VER="v1.2.2"
 ```
 
 Next, create a new branch to merge our changes into the new version of upstream source code:
@@ -56,6 +56,9 @@ Next, create a new branch to merge our changes into the new version of upstream 
 ```bash
 git checkout ingest-$LAST_VER
 git checkout -b ingest-$NEW_VER
+
+# Tagging the target commit as a marker
+git tag -s -m "The base commit of Datadocs forked version ${NEW_VER}" "ingest-${NEW_VER}-base" "$NEW_VER";
 
 # It is highly RECOMMENDED to rebase our changes into the target branch/tag by GUI program
 # to avoid elementary mistakes.
@@ -89,6 +92,9 @@ Finally, you push this new branch to our forked repository:
 ```bash
 # Please change the following `origin` to your custom remote name if you changed it
 git push origin ingest-$NEW_VER
+
+# Push the base marker tag to the Github repo
+git push origin tag ingest-${NEW_VER}-base
 
 # If the new version is based on a Git tag, please also push this tag to the repo
 # for a reference purpose:
