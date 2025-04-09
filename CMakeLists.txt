@@ -364,6 +364,13 @@ else()
   endif()
 endif()
 
+# Normalize Datadocs branch/tag names (E.g., ingest-v1.2.2-base-0-00000fffff)
+string(
+  REGEX REPLACE 
+  "^[^-]+-(v[0-9]+\\.[0-9]+\\.[0-9]+)(-[^-]+)?-([0-9]+-g[0-9a-fA-F]+)$" "\\1-\\3" 
+  GIT_DESCRIBE "${GIT_DESCRIBE}"
+)
+
 if (NOT GIT_DESCRIBE MATCHES "^v[0-9]+\.[0-9]+\.[0-9]+\-[0-9]+\-g[a-f0-9]+$")
   message(FATAL_ERROR "Computed GIT_DESCRIBE '${GIT_DESCRIBE}' is not in the expected form 'vX.Y.Z-N-gGITHASH123'. Consider providing OVERRIDE_GIT_DESCRIBE explicitly to CMake")
 endif()
