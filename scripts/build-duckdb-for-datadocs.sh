@@ -6,10 +6,13 @@
 #   A bash script for building DuckDB with the Datadocs extension
 #   (This script has been tested on Ubuntu 22.04 and MacOS Sonoma 14)
 # 
-# Usage: build-duckdb-for-datadocs.sh [debug|cldebug|release|...] [--shell]
+# Usage: build-duckdb-for-datadocs.sh [debug|cldebug|release|...] [--shell] [-v${version}]
+#
+#        --shell        open built duckdb shell after build done
+#        -v${version}   build duckdb with a explicit version string (e.g., -v1.2.1)
 #
 # Author:  Liu Yue @hangxingliu
-# Version: 2025-04-02
+# Version: 2025-04-09
 #
 # Required Softwares:
 #
@@ -41,17 +44,21 @@
 throw() { echo -e "fatal: $1" >&2; exit 1; }
 print_cmd() { printf "\$ %s\n" "$*" >&2; }
 execute() { print_cmd "$@"; "$@" || throw "Failed to execute '$1'"; }
+get_stdout() { print_cmd "$@"; get_stdout_result="$("$@")"; }
 
 # this relative path is based on the root of the project
 log_file="./scripts/logs/build-$(date "+%Y%m%d-%H%M").log"; 
 open_duckdb_shell=
 make_target=()
+explicit_version=
 parse_args() {
     local arg
     while [ "${#@}" -gt 0 ]; do
         arg="$1"; shift;
         case "$arg" in
             --shell) open_duckdb_shell=1;;
+            -v) explicit_version="v${1}"; shift;;
+            -v*) explicit_version="v${arg#'-v'}";;
             *) make_target+=( "$arg" );;
         esac
     done
@@ -81,19 +88,44 @@ fi
 pushd "$( dirname -- "${BASH_SOURCE[0]}" )/.." >/dev/null || exit 1;
 execute mkdir -p "$(dirname -- "${log_file}")";
 
+#
+# Set explicit version string
+#
+if [ -n "$explicit_version" ]; then
+    get_stdout git log -n 1 --format=%h;
+    git_describe="v${explicit_version#'v'}-0-g${get_stdout_result}";
+    execute export OVERRIDE_GIT_DESCRIBE="${git_describe}";
+    # execute export EXTRA_CMAKE_VARIABLES="-DOVERRIDE_GIT_DESCRIBE='${git_describe}'"
+    
+    # make sure the "OVERRIDE_GIT_DESCRIBE" in DuckDB's CMakeLists.txt doesn't changed:
+    grep -q -F 'OVERRIDE_GIT_DESCRIBE' CMakeLists.txt || 
+        throw "'OVERRIDE_GIT_DESCRIBE' is unknown (the CMakeLists.txt in might be changed)";
+fi
+
+#
 # Build the following extension
+#
 execute export BUILD_AUTOCOMPLETE=1;  # for the auto-completion feature in REPL 
 execute export BUILD_JSON=1;          # it is a dependency of Datadocs extension
 execute export BUILD_DATADOCS=1;
+
+#
+# Use CMkae `Ninja` generator
+# https://cmake.org/cmake/help/latest/manual/cmake-generators.7.html#ninja-generators
+#
+execute export GEN=ninja;
 
 # https://cmake.org/cmake/help/latest/envvar/CMAKE_BUILD_PARALLEL_LEVEL.html
 # execute export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)";
 
 SECONDS=0
-
-execute export GEN=ninja;
 printf "\n  log file: %s\n\n" "$log_file";
 
+#
+# the main command for building:
+#
+# make release
+#
 make_cmd=( make "-j$(nproc)" "${make_target[@]}" );
 print_cmd "${make_cmd[@]}" | tee "${log_file}";
 "${make_cmd[@]}" 2>&1 | tee -a "${log_file}";
