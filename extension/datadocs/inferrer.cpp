@@ -640,18 +640,105 @@ public:
 	int m_int_mask = 0; // seen "0" value and seen "1"
 };
 
-static const std::regex _re_check_integer(R"(\$?0|-?\$?[1-9](?:\d*|\d{0,2}(?:,\d{3})+))");
-template<>
-int TType<ColumnType::Integer>::infer(const CellRaw& cell)
-{
-	if (!m_valid)
-		return 0;
-	return m_valid = std::visit(overloaded{
-	[](const std::string& s) -> bool { return std::regex_match(s, _re_check_integer); },
-	[](double v) -> bool { return is_integer(v); },
-	[](auto v) -> bool { return std::is_integral_v<decltype(v)>; },
-	}, cell);
-}
+class TInteger {
+public:
+	int infer(const CellRaw &cell) {
+		if (!m_valid)
+			return 0;
+		return m_valid = std::visit(overloaded{
+		[this](const std::string& s) -> bool {
+			const char *data = &s[0];
+			const char *end = data + s.size();
+			bool is_minus = *data == '-';
+			data += is_minus;
+			data += *data == '$';
+			char c = *data;
+			if (c == '0') {
+				return end - data == 1 && !is_minus;
+			}
+			if (!StringUtil::CharacterIsDigit(c)) {
+				return false;
+			}
+			uint64_t n = c - '0';
+			const char *start = data;
+			const char *last_comma = nullptr;
+			while (++data < end) {
+				c = *data;
+				if (StringUtil::CharacterIsDigit(c)) {
+					c -= '0';
+					if (n >= 1844674407370955161u && (n != 1844674407370955161u || c > 5)) {
+						return false;
+					}
+					n = n * 10 + c;
+				} else if (c == ',') {
+					if (last_comma) {
+						if (data - last_comma != 4) {
+							return false;
+						}
+					} else if (data - start > 3) {
+						return false;
+					}
+					last_comma = data;
+				} else {
+					return false;
+				}
+			}
+			if (last_comma && data - last_comma != 4) {
+				return false;
+			}
+			return check_range(n, is_minus);
+		},
+		[this](int64_t v) -> bool {
+			return check_range((uint64_t)std::abs(v), v < 0); // UB, technically speaking
+		},
+		[this](double v) -> bool {
+			if (v != std::trunc(v) || v < std::numeric_limits<int64_t>::min() || v > std::numeric_limits<uint64_t>::max()) {
+				return false;
+			}
+			return check_range((uint64_t)std::fabs(v), v < 0);
+		},
+		[](bool v) -> bool { return true; },
+		[](auto v) -> bool { return false; },
+		}, cell);
+	}
+
+	bool check_range(uint64_t v, bool is_minus) {
+		if (is_minus) {
+			m_signed = true;
+			--v; // takes care of numbers like 0x80...
+		}
+		if (v > m_max_value) {
+			m_max_value = v;
+		}
+		return true;
+	}
+
+	bool create_schema(IngestColumnDefinition& col) const
+	{
+		if (m_valid) {
+			size_t type_idx = 0;
+			unsigned shift = 8;
+			uint64_t max_value = m_max_value >> (shift - m_signed);
+			std::underlying_type_t<ColumnType> tp = 0;
+			while (max_value) {
+				max_value >>= shift;
+				if (++tp >= 3) {
+					if (max_value) {
+						return false;
+					}
+					break;
+				}
+				shift *= 2;
+			}
+			col.column_type = ColumnType(std::underlying_type_t<ColumnType>(m_signed ? ColumnType::Int8 : ColumnType::UInt8) + tp);
+		}
+		return m_valid;
+	}
+
+	bool m_valid = true;
+	bool m_signed = false;
+	uint64_t m_max_value = 0x7F;
+};
 
 static const std::regex _re_check_decimal(R"([+-]?(0|[1-9]\d*|\d+\.|\d*\.(\d+))(e[+-]?\d+)?|([+-]?(?:inf(?:inity)?|nan)))", std::regex_constants::icase);
 
@@ -1244,7 +1331,7 @@ public:
 	bool m_valid = true;
 	std::tuple<
 		TBoolean,
-		TType<ColumnType::Integer>,
+		TInteger,
 		TDecimal,
 		TBytes,
 		TBytesBase64,
@@ -1464,7 +1551,7 @@ private:
 
 	std::tuple<
 		TBoolean,
-		TType<ColumnType::Integer>,
+		TInteger,
 		TDecimal,
 		TBytes,
 		TBytesBase64,
@@ -1665,7 +1752,7 @@ public:
 public:
 	std::tuple<
 		TBoolean,
-		TType<ColumnType::Integer>,
+		TInteger,
 		TDecimal,
 		TBytes,
 		TBytesBase64,
@@ -1817,7 +1904,7 @@ public:
 private:
 	std::tuple<
 		TBoolean,
-		TType<ColumnType::Integer>,
+		TInteger,
 		TDecimal,
 		TBytes,
 		TBytesBase64,

@@ -180,6 +180,13 @@ static void jwrite(char *obj, rj::Writer<StdStringBuffer> &json) {
 static const std::vector<std::string> type_index {
 	"VARCHAR",
 	"BOOLEAN",
+	"UTINYINT",
+	"USMALLINT",
+	"UINTEGER",
+	"UBIGINT",
+	"TINYINT",
+	"SMALLINT",
+	"INTEGER",
 	"BIGINT",
 	"DOUBLE",
 	"DATE",
@@ -207,8 +214,7 @@ public:
 
 static const ColumnTypeMap type_map(type_index, {
 	{"BOOL"     , ColumnType::Boolean},
-	{"INTEGER"  , ColumnType::Integer},
-	{"INT"      , ColumnType::Integer},
+	{"INT"      , ColumnType::Int64},
 	{"DECIMAL"  , ColumnType::Numeric},
 	{"FLOAT"    , ColumnType::Decimal},
 	{"STRING"   , ColumnType::String},

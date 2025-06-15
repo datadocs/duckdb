@@ -89,18 +89,56 @@ public:
 	bool Write(bool v) override;
 };
 
-class IngestColBIGINT : public IngestColBase {
+template <typename T, LogicalTypeId TYPE_ID>
+class IngestColInteger : public IngestColBase {
 public:
 	using IngestColBase::IngestColBase, IngestColBase::Write;
 
 	LogicalType GetType() const override {
-		return LogicalType::BIGINT;
+		return TYPE_ID;
 	}
-	bool Write(string_t v) override;
-	bool Write(int64_t v) override;
-	bool Write(bool v) override;
-	bool Write(double v) override;
+
+	bool Write(string_t v) override {
+		T result;
+		if (!TryCast::Operation(v, result, true)) {
+			std::string buffer;
+			if (!parse_money(v.GetData(), v.GetSize(), buffer) || !TryCast::Operation(string_t(buffer), result, true)) {
+				return false;
+			}
+		}
+		Writer().Set(result);
+		return true;
+	}
+
+	bool Write(int64_t v) override {
+		if constexpr (std::is_same_v<T, uint64_t>) {
+			if (v < 0) {
+				return false;
+			}
+		} else if constexpr(!std::is_same_v<T, int64_t>) {
+			if (v < std::numeric_limits<T>::min() || v > std::numeric_limits<T>::max()) {
+				return false;
+			}
+		}
+		Writer().Set(static_cast<T>(v));
+		return true;
+	}
+
+	bool Write(bool v) override {
+		Writer().Set(static_cast<T>(v));
+		return true;
+	}
+
+	bool Write(double v) override {
+		if (v < std::numeric_limits<T>::min() || v > std::numeric_limits<T>::max() || v != std::trunc(v)) {
+			return false;
+		}
+		Writer().Set(static_cast<T>(v));
+		return true;
+	}
 };
+
+typedef IngestColInteger<int64_t, LogicalTypeId::BIGINT> IngestColBIGINT;
 
 class IngestColDOUBLE : public IngestColBase {
 public:
@@ -336,7 +374,14 @@ typename T::ReturnType *BuildColumn(const IngestColumnDefinition &col, idx_t &cu
 	switch(col.column_type) {
 	case ColumnType::String : return new typename T::template Type<IngestColVARCHAR>(col.name, cur_row);
 	case ColumnType::Boolean: return new typename T::template Type<IngestColBOOLEAN>(col.name, cur_row);
-	case ColumnType::Integer: return new typename T::template Type<IngestColBIGINT> (col.name, cur_row);
+	case ColumnType:: Int8: return new typename T::template Type<IngestColInteger< int8_t, LogicalTypeId:: TINYINT>> (col.name, cur_row);
+	case ColumnType::UInt8: return new typename T::template Type<IngestColInteger<uint8_t, LogicalTypeId::UTINYINT>> (col.name, cur_row);
+	case ColumnType:: Int16: return new typename T::template Type<IngestColInteger< int16_t, LogicalTypeId:: SMALLINT>> (col.name, cur_row);
+	case ColumnType::UInt16: return new typename T::template Type<IngestColInteger<uint16_t, LogicalTypeId::USMALLINT>> (col.name, cur_row);
+	case ColumnType:: Int32: return new typename T::template Type<IngestColInteger< int32_t, LogicalTypeId:: INTEGER>> (col.name, cur_row);
+	case ColumnType::UInt32: return new typename T::template Type<IngestColInteger<uint32_t, LogicalTypeId::UINTEGER>> (col.name, cur_row);
+	case ColumnType:: Int64: return new typename T::template Type<IngestColInteger< int64_t, LogicalTypeId:: BIGINT>> (col.name, cur_row);
+	case ColumnType::UInt64: return new typename T::template Type<IngestColInteger<uint64_t, LogicalTypeId::UBIGINT>> (col.name, cur_row);
 	case ColumnType::Decimal: return new typename T::template Type<IngestColDOUBLE> (col.name, cur_row);
 	case ColumnType::Date   : return new typename T::template Type<IngestColDATE>   (col.name, cur_row, col.format);
 	case ColumnType::Time   : return new typename T::template Type<IngestColTIME>   (col.name, cur_row, col.format);
