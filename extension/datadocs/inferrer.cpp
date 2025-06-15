@@ -1502,8 +1502,11 @@ public:
 
 	bool new_text()
 	{
-		m_current->new_value(std::move(m_cur_text));
-		m_cur_text.clear();
+		check_new_text();
+		if (!m_cur_text.empty()) {
+			m_current->new_value(std::move(m_cur_text));
+			m_cur_text.clear();
+		}
 		return true;
 	};
 
