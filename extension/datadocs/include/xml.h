@@ -18,7 +18,7 @@ public:
 	XML_ParserStruct* create_parser();
 protected:
 	static void do_text(void* userdata, const char* buf, int buflen);
-	bool check_new_text();
+	void check_new_text();
 	void abort();
 	XML_ParserStruct* m_parser = nullptr;
 	std::string m_cur_text;
@@ -39,7 +39,7 @@ private:
 	static void do_start(void* userdata, const char* name, const char** atts)
 	{
 		Handler* handler = static_cast<Handler*>(userdata);
-		if (handler->check_new_text() && !handler->new_text())
+		if (!handler->new_text())
 			handler->abort();
 		else if (!handler->start_tag(name, atts))
 			handler->abort();
@@ -47,7 +47,7 @@ private:
 	static void do_end(void* userdata, const char*)
 	{
 		Handler* handler = static_cast<Handler*>(userdata);
-		if (handler->check_new_text() && !handler->new_text())
+		if (!handler->new_text())
 			handler->abort();
 		else
 			handler->end_tag();
@@ -105,6 +105,7 @@ public:
 
 	bool new_text()
 	{
+		check_new_text();
 		bool res = m_top->new_text(std::move(m_cur_text));
 		m_cur_text.clear();
 		return res;

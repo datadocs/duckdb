@@ -38,17 +38,19 @@ void XMLHandlerBase::do_text(void* userdata, const char* buf, int buflen)
 	static_cast<XMLHandlerBase*>(userdata)->m_cur_text.append(buf, buflen);
 }
 
-bool XMLHandlerBase::check_new_text()
+void XMLHandlerBase::check_new_text()
 {
-	size_t i = m_cur_text.find_first_not_of("\t\n\v\f\r ");
-	if (i != std::string::npos)
-	{
-		rtrim(m_cur_text);
-		if (i > 0)
-			m_cur_text.erase(0, i);
-		return true;
+	if (!m_cur_text.empty()) {
+		size_t i = m_cur_text.find_first_not_of("\t\n\v\f\r ");
+		if (i != std::string::npos) {
+			rtrim(m_cur_text);
+			if (i > 0) {
+				m_cur_text.erase(0, i);
+			}
+		} else {
+			m_cur_text.clear();
+		}
 	}
-	return false;
 }
 
 void XMLHandlerBase::abort()
@@ -158,6 +160,9 @@ public:
 	}
 	virtual bool new_text(std::string&& s) override
 	{
+		if (s.empty()) {
+			return true;
+		}
 		XMLBase* obj = new_tag("#text", nullptr);
 		return !obj || obj->new_text(std::move(s));
 	}
