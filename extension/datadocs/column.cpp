@@ -96,36 +96,6 @@ bool IngestColBOOLEAN::Write(bool v) {
 	return true;
 }
 
-bool IngestColBIGINT::Write(string_t v) {
-	int64_t result;
-	if (!TryCast::Operation(v, result, true)) {
-		std::string buffer;
-		if (!parse_money(v.GetData(), v.GetSize(), buffer) || !TryCast::Operation(string_t(buffer), result, true)) {
-			return false;
-		}
-	}
-	Writer().Set(result);
-	return true;
-}
-
-bool IngestColBIGINT::Write(int64_t v) {
-	Writer().Set(v);
-	return true;
-}
-
-bool IngestColBIGINT::Write(bool v) {
-	Writer().Set((int64_t)v);
-	return true;
-}
-
-bool IngestColBIGINT::Write(double v) {
-	if (!is_integer(v)) {
-		return false;
-	}
-	Writer().Set((int64_t)v);
-	return true;
-}
-
 bool IngestColDOUBLE::Write(string_t v) {
 	double result;
 	if (!TryCast::Operation(v, result, false)) {
