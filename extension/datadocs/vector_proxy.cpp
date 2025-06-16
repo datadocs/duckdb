@@ -85,7 +85,7 @@ string_t &VectorWriter::ReserveString(idx_t size) {
 }
 
 list_entry_t &VectorWriter::GetList() noexcept {
-	D_ASSERT(vec.GetType().id() == LogicalTypeId::LIST);
+	D_ASSERT(vec.GetType().id() == LogicalTypeId::LIST || vec.GetType().id() == LogicalTypeId::MAP);
 	return FlatVector::GetData<list_entry_t>(vec)[i_row];
 }
 

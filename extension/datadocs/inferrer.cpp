@@ -448,7 +448,7 @@ private:
 	XMLRoot handler;
 };
 
-void ParserImpl::BuildColumns() {
+void TableParserImpl::BuildColumns() {
 	Schema *schema = get_schema();
 	for (const auto &col : schema->fields) {
 		int index = col.index - 1;
@@ -475,10 +475,11 @@ void ParserImpl::BuildColumns() {
 		}
 		m_columns[index] = std::unique_ptr<IngestColBase>(column);
 	}
+	m_columns.push_back(std::make_unique<IngestColErrors>(cur_row));
 	m_columns.push_back(std::make_unique<IngestColBIGINT>("__rownum__", cur_row));
 }
 
-void ParserImpl::BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) {
+void TableParserImpl::BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) {
 	for (auto &col : m_columns) {
 		if (col) {
 			names.push_back(col->GetName());
@@ -487,8 +488,8 @@ void ParserImpl::BindSchema(std::vector<LogicalType> &return_types, std::vector<
 	}
 }
 
-idx_t ParserImpl::FillChunk(DataChunk &output) {
-	size_t n_columns = m_columns.size();
+idx_t TableParserImpl::FillChunk(DataChunk &output) {
+	size_t n_columns = m_columns.size() - 2;
 	size_t i_col = 0;
 	for (auto &col : m_columns) {
 		if (col) {
@@ -508,7 +509,7 @@ idx_t ParserImpl::FillChunk(DataChunk &output) {
 			return cur_row;
 		}
 
-		for (size_t i_col = 0; i_col < n_columns-1; ++i_col)
+		for (size_t i_col = 0; i_col < n_columns; ++i_col)
 		{
 			IngestColBase *col = m_columns[i_col].get();
 			if (!col) {
@@ -525,8 +526,15 @@ idx_t ParserImpl::FillChunk(DataChunk &output) {
 			}, cell);
 			if (!res) {
 				col->WriteNull();
+				IngestColErrors* err = ((IngestColErrors*)m_columns[n_columns].get());
+				err->WriteColumnName(col->GetName());
+				std::visit(overloaded{
+				[&](const CellRawDate& v) -> bool { return err->WriteExcelDate(v.d); },
+				[&](auto v) -> bool { return err->Write(v); },
+				}, cell);
 			}
 		}
+		((IngestColErrors*)m_columns[n_columns].get())->Reset();
 		m_columns.back()->Write(row_number);
 	}
 	return STANDARD_VECTOR_SIZE;
@@ -1920,7 +1928,7 @@ private:
 	> m_types;
 };
 
-void ParserImpl::build_column_info(std::vector<Column>& columns)
+void TableParserImpl::build_column_info(std::vector<Column>& columns)
 {
 	Schema& schema = *get_schema();
 	std::unordered_set<std::string> have_columns; // columns we already have
@@ -1948,7 +1956,7 @@ void ParserImpl::build_column_info(std::vector<Column>& columns)
 	}
 }
 
-void ParserImpl::infer_table(const std::string* comment)
+void TableParserImpl::infer_table(const std::string* comment)
 {
 	std::vector<RowRawNumbered> rows(INFER_MAX_ROWS);
 	for (size_t i_row = 0; i_row < rows.size(); ++i_row) {
@@ -1962,7 +1970,7 @@ void ParserImpl::infer_table(const std::string* comment)
 		do_infer_table(comment, rows);
 }
 
-void ParserImpl::do_infer_table(const std::string* comment, std::vector<RowRawNumbered>& rows) {
+void TableParserImpl::do_infer_table(const std::string* comment, std::vector<RowRawNumbered>& rows) {
 	for (size_t i_row = 0; i_row < rows.size(); ++i_row) {
 		for (CellRaw& cell : rows[i_row]) {
 			if (get_schema()->remove_null_strings && cell_null_str(cell))

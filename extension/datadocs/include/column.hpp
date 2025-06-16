@@ -436,4 +436,63 @@ struct ColumnBuilder {
 	static ReturnType *Build(const IngestColumnDefinition &col, idx_t &cur_row);
 };
 
+class IngestColErrors : public IngestColBase {
+public:
+	IngestColErrors(idx_t &cur_row) noexcept
+	    : IngestColBase("__errors__", cur_row), child_key("", list_row), child_value("", list_row) {
+	}
+
+	virtual void SetVector(Vector *new_vec) noexcept override {
+		IngestColBase::SetVector(new_vec);
+		buffer = (VectorListBuffer *)(new_vec->GetAuxiliary().get());
+		Vector &child_vector = buffer->GetChild();
+		const auto &entries = StructVector::GetEntries(child_vector);
+		child_key.SetVector(entries[0].get());
+		child_value.SetVector(entries[1].get());
+	}
+
+	virtual LogicalType GetType() const override;
+
+	void WriteColumnName(string_t column) {
+		list_row = buffer->GetSize();
+		buffer->Reserve(list_row + 1);
+		buffer->SetSize(list_row + 1);
+		auto &entry = Writer().GetList();
+		if (!m_have_error) {
+			m_have_error = true;
+			entry.offset = list_row;
+			entry.length = 1;
+		} else {
+			++entry.length;
+		}
+		child_key.Write(column);
+	}
+
+	void WriteError(string_t column, string_t value) {
+		WriteColumnName(column);
+		child_value.Write(value);
+	}
+
+	virtual bool Write(string_t v) { return child_value.Write(v); }
+	virtual bool Write(int64_t v) { return child_value.Write(v); }
+	virtual bool Write(bool v) { return child_value.Write(v); }
+	virtual bool Write(double v) { return child_value.Write(v); }
+	virtual bool WriteExcelDate(double v) { return child_value.Write(v); }
+
+	void Reset() {
+		if (m_have_error) {
+			m_have_error = false;
+		} else {
+			WriteNull();
+		}
+	}
+
+private:
+	bool m_have_error = false;
+	VectorListBuffer *buffer = nullptr;
+	IngestColVARCHAR child_key;
+	IngestColVARCHAR child_value;
+	idx_t list_row;
+};
+
 } // namespace duckdb
