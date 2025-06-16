@@ -75,7 +75,7 @@ struct JSONColumnBuilder {
 
 class JSONTopListStruct : public JSONHandler {
 public:
-	JSONTopListStruct() : col_row_number("__rownum__", cur_row) {}
+	JSONTopListStruct() : col_row_number("__rownum__", cur_row), col_errors(cur_row) {}
 	virtual ~JSONTopListStruct() = default;
 
 	void BuildColumns(JSONSchema &schema);
@@ -119,6 +119,7 @@ public:
 				}
 			}
 		}
+		col_errors.Reset();
 		col_row_number.Write(m_row_number++);
 		if (++cur_row >= STANDARD_VECTOR_SIZE) {
 			dispatcher->m_suspended = true;
@@ -134,6 +135,7 @@ private:
 	std::vector<std::unique_ptr<JSONValue>> m_columns;
 	IngestColChildrenMap m_children;
 	IngestColBIGINT col_row_number;
+	IngestColErrors col_errors;
 };
 
 class JSONParser : public ParserImpl

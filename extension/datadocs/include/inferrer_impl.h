@@ -35,9 +35,7 @@ public:
 	virtual bool infer_schema() override;
 	virtual bool open() override;
 	virtual void close() override;
-	virtual void BuildColumns() override;
-	virtual void BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) override;
-	virtual idx_t FillChunk(DataChunk &output) override;
+
 	virtual int get_percent_complete() override;
 	virtual size_t get_sheet_count() override;
 	virtual std::vector<std::string> get_sheet_names() override;
@@ -54,6 +52,16 @@ protected:
 	friend class ZIPParser;
 	virtual bool do_infer_schema() = 0;
 	virtual int64_t get_next_row_raw(RowRaw& row) { return -1; };
+};
+
+class TableParserImpl : public ParserImpl {
+public:
+	virtual ~TableParserImpl() = default;
+	virtual void BuildColumns() override;
+	virtual void BindSchema(std::vector<LogicalType> &return_types, std::vector<string> &names) override;
+	virtual idx_t FillChunk(DataChunk &output) override;
+
+protected:
 	void build_column_info(std::vector<Column>& columns);
 	void infer_table(const std::string* comment);
 	void do_infer_table(const std::string* comment, std::vector<RowRawNumbered>& rows);

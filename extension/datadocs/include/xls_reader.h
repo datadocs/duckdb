@@ -12,7 +12,7 @@
 namespace duckdb {
 
 template<class TWorkBook>
-class XLParser : public ParserImpl
+class XLParser : public TableParserImpl
 {
 public:
 	XLParser(std::shared_ptr<BaseReader> reader);

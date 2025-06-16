@@ -644,6 +644,8 @@ void JSONTopListStruct::BindSchema(std::vector<LogicalType> &return_types, std::
 		names.push_back(col->column.GetName());
 		return_types.push_back(col->column.GetType());
 	}
+	names.push_back(col_errors.GetName());
+	return_types.push_back(col_errors.GetType());
 	names.push_back(col_row_number.GetName());
 	return_types.push_back(col_row_number.GetType());
 	m_row_number = 0;
@@ -663,11 +665,12 @@ idx_t JSONParser::FillChunk(DataChunk &output)
 void JSONTopListStruct::NewChunk(DataChunk &output) {
 	cur_row = 0;
 	size_t n_columns = m_columns.size();
-	D_ASSERT(output.data.size() == n_columns + 1);
+	D_ASSERT(output.data.size() == n_columns + 2);
 	for (size_t i = 0; i < n_columns; ++i) {
 		m_columns[i]->column.SetVector(&output.data[i]);
 	}
-	col_row_number.SetVector(&output.data[n_columns]);
+	col_errors.SetVector(&output.data[n_columns]);
+	col_row_number.SetVector(&output.data[n_columns+1]);
 }
 
 }

@@ -320,6 +320,7 @@ found_bad_quote:
 	std::vector<RowRawNumbered> rows(INFER_MAX_ROWS);
 	DataChunk output;
 	output.data.emplace_back(LogicalType::SQLNULL, nullptr);
+	m_columns.push_back(nullptr);
 	m_columns.push_back(std::make_unique<IngestColCSVInfer>(rows, cur_row));
 	is_inferring = true;
 	idx_t n_rows = FillChunk(output);
@@ -436,25 +437,31 @@ bool CSVParser::is_newline(char c)
 
 void CSVParser::write_value(size_t i_col) {
 	bool remove_null_strings = m_schema.remove_null_strings;
+	string_t s = tmp_string.empty() ? string_t(value_start, value_end - value_start) : tmp_string.AppendChunk(value_start, value_end);
+	auto utf_type = Utf8Proc::Analyze(s.GetData(), s.GetSize());
+	if (utf_type == UnicodeType::INVALID) {
+		throw InvalidInputException("Invalid unicode");
+	}
 	IngestColBase *col;
-	if (i_col >= m_columns.size() - 1) {
+	if (i_col >= m_columns.size() - 2) {
 		if (is_inferring) {
-			col = m_columns[0].get();
+			col = m_columns.back().get();
 			remove_null_strings = false;
 		} else {
+			if (!s.Empty()) {
+				((IngestColErrors*)m_columns[m_columns.size() - 2].get())->WriteError("", s);
+			}
 			col = nullptr;
 		}
 	} else {
 		col = m_columns[i_col].get();
 	}
 	if (col) {
-		string_t s = tmp_string.empty() ? string_t(value_start, value_end - value_start) : tmp_string.AppendChunk(value_start, value_end);
-		auto utf_type = Utf8Proc::Analyze(s.GetData(), s.GetSize());
-		if (utf_type == UnicodeType::INVALID) {
-			throw InvalidInputException("Invalid unicode");
-		}
-		if (remove_null_strings && (s.GetSize() == 0 || s == "NULL" || s == "null") || !col->Write(s)) {
+		if (remove_null_strings && (s.GetSize() == 0 || s == "NULL" || s == "null")) {
 			col->WriteNull();
+		} else if (!col->Write(s)) {
+			col->WriteNull();
+			((IngestColErrors*)m_columns[m_columns.size() - 2].get())->WriteError(col->GetName(), s);
 		}
 	}
 	tmp_string.clear();
@@ -469,7 +476,7 @@ idx_t CSVParser::FillChunk(DataChunk &output) {
 		}
 	}
 	D_ASSERT(output.data.size() == i_col);
-	--n_columns; // last column is row number
+	n_columns -= 2; // last columns are errors and row number
 
 	cur_row = 0;
 	while (cur < end || underflow()) {
@@ -686,6 +693,9 @@ idx_t CSVParser::FillChunk(DataChunk &output) {
 			if (m_columns[i_col]) {
 				m_columns[i_col]->WriteNull();
 			}
+		}
+		if (!is_inferring) {
+			((IngestColErrors*)m_columns[n_columns].get())->Reset();
 		}
 		m_columns.back()->Write((int64_t)++m_row_number);
 		if (++cur_row >= STANDARD_VECTOR_SIZE) {

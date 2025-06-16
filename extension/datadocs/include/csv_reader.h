@@ -25,7 +25,7 @@ public:
 	}
 };
 
-class CSVParser : public ParserImpl
+class CSVParser : public TableParserImpl
 {
 public:
 	CSVParser(std::shared_ptr<BaseReader> reader);

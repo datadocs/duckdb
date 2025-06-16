@@ -379,4 +379,10 @@ IngestColBase *ColumnBuilder::Build(const IngestColumnDefinition &col, idx_t &cu
 	}
 }
 
+const LogicalType ErrorType = LogicalType::MAP(LogicalType::VARCHAR, LogicalType::VARCHAR);
+
+LogicalType IngestColErrors::GetType() const {
+	return ErrorType;
+}
+
 } // namespace duckdb

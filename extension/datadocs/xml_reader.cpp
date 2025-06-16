@@ -244,7 +244,7 @@ private:
 
 class XMLTopStruct : public XMLStruct {
 public:
-	XMLTopStruct(XMLRoot *root) : XMLStruct(cur_row), raw_parser(nullptr), col_row_number("__rownum__", cur_row), handler(root) {}
+	XMLTopStruct(XMLRoot *root) : XMLStruct(cur_row), raw_parser(nullptr), col_row_number("__rownum__", cur_row), col_errors(cur_row), handler(root) {}
 
 	void BuildColumns(const Schema &schema) {
 		XMLBuildColumns(schema.fields, m_children.keys, m_columns, cur_row);
@@ -255,6 +255,8 @@ public:
 			names.push_back(col->column.GetName());
 			return_types.push_back(col->column.GetType());
 		}
+		names.push_back(col_errors.GetName());
+		return_types.push_back(col_errors.GetType());
 		names.push_back(col_row_number.GetName());
 		return_types.push_back(col_row_number.GetType());
 		m_row_number = 0;
@@ -263,11 +265,12 @@ public:
 	bool NewChunk(BaseReader &reader, DataChunk &output) {
 		cur_row = 0;
 		size_t n_columns = m_columns.size();
-		D_ASSERT(output.data.size() == n_columns + 1);
+		D_ASSERT(output.data.size() == n_columns + 2);
 		for (size_t i = 0; i < n_columns; ++i) {
 			m_columns[i]->column.SetVector(&output.data[i]);
 		}
-		col_row_number.SetVector(&output.data[n_columns]);
+		col_errors.SetVector(&output.data[n_columns]);
+		col_row_number.SetVector(&output.data[n_columns + 1]);
 
 		const int BUFF_SIZE = 4096;
 		if (!raw_parser) {
@@ -304,6 +307,7 @@ public:
 			return;
 		}
 		XMLStruct::end_tag();
+		col_errors.Reset();
 		col_row_number.Write(m_row_number++);
 		if (++cur_row >= STANDARD_VECTOR_SIZE) {
 			XML_StopParser(raw_parser, XML_TRUE);
@@ -314,6 +318,7 @@ public:
 private:
 	int64_t m_row_number;
 	IngestColBIGINT col_row_number;
+	IngestColErrors col_errors;
 	XML_Parser raw_parser;
 	XMLParseHandler handler;
 };
