@@ -306,6 +306,7 @@ private:
 };
 
 static const StructJsonMap schema_map {
+	JSON_FIELD(Schema, nrows),
 	JSON_FIELD(Schema, fields)
 };
 
@@ -319,6 +320,7 @@ static const StructJsonMap csv_schema_map {
 	JSON_FIELD(CSVSchema, charset),
 	JSON_FIELD(CSVSchema, header_row),
 	JSON_FIELD(CSVSchema, first_data_row),
+	JSON_FIELD(CSVSchema, nrows),
 	JSON_FIELD(CSVSchema, fields)
 };
 
@@ -327,10 +329,12 @@ static const StructJsonMap xls_schema_map {
 	JSON_FIELD(XLSSchema, comment),
 	JSON_FIELD(XLSSchema, header_row),
 	JSON_FIELD(XLSSchema, first_data_row),
+	JSON_FIELD(XLSSchema, nrows),
 	JSON_FIELD(XLSSchema, fields)
 };
 
 static const StructJsonMap json_schema_map {
+	JSON_FIELD(JSONSchema, nrows),
 	JSON_FIELD(JSONSchema, start_path),
 	JSON_FIELD(JSONSchema, fields)
 };

@@ -37,8 +37,10 @@ bool XLParser<TWorkBook>::do_infer_schema()
 	m_schema.first_data_row = 1;
 	infer_table(nullptr);
 	int n_rows = m_ws.nrows();
-	if (n_rows > 0)
-		m_schema.nrows = n_rows;
+	if (m_schema.header_row > 0) {
+		n_rows -= m_schema.header_row;
+	}
+	m_schema.nrows = n_rows > 0 ? n_rows : 0;
 	return true;
 }
 

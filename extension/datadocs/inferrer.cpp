@@ -1477,10 +1477,9 @@ public:
 		auto [value, res] = m_children.insert(name);
 		if (!res)
 		{
-			if (value->m_saw_tag)
+			if (value->m_tag_count > 0)
 				value->m_is_list = true;
-			else
-				value->m_saw_tag = true;
+			++value->m_tag_count;
 			value->reset_values();
 		}
 		return value;
@@ -1496,7 +1495,7 @@ public:
 	void reset_values()
 	{
 		for (auto& p : m_children)
-			p.second.m_saw_tag = false;
+			p.second.m_tag_count = 0;
 	}
 
 	bool create_column_schema(IngestColumnDefinition& col) const
@@ -1510,7 +1509,7 @@ public:
 		return true;
 	}
 
-	bool create_file_schema(std::vector<IngestColumnDefinition>& fields) const
+	bool create_file_schema(Schema &schema) const
 	{
 		if (m_children.empty())
 			return false;
@@ -1518,12 +1517,14 @@ public:
 		for (const auto& [_, tag] : root.m_children)
 			if (tag.m_is_list && !tag.m_children.empty())
 			{
-				tag.create_schema(fields);
+				tag.create_schema(schema.fields);
+				schema.nrows = tag.m_tag_count;
 				return true;
 			}
 		if (!root.m_children.empty() && !root.m_children.front().m_children.empty())
 		{
-			root.m_children.front().create_schema(fields);
+			root.m_children.front().create_schema(schema.fields);
+			schema.nrows = 1;
 			return true;
 		}
 		return false;
@@ -1570,7 +1571,7 @@ private:
 	> m_types;
 	bool m_has_single_value = false;
 	bool m_is_list = false;
-	bool m_saw_tag = true;
+	unsigned m_tag_count = 1;
 	infer_children<XMLInferValue> m_children;
 };
 
@@ -1684,6 +1685,7 @@ public:
 	{
 		update_level(ValueObject);
 		dispatcher->push(&m_obj);
+		++m_row_count;
 		return true;
 	}
 	virtual bool StartArray(JSONDispatcher* dispatcher) override
@@ -1746,6 +1748,7 @@ public:
 		{
 			m_obj.create_schema(schema.fields);
 			schema.start_path.resize(level);
+			schema.nrows = m_row_count;
 			return true;
 		}
 		for (const auto& [key, value] : m_obj.m_children)
@@ -1775,6 +1778,7 @@ public:
 	unsigned m_flags = 0;
 	int m_level = 0;
 	int m_value_level = 0;
+	unsigned m_row_count = 0;
 	JSONInferObject m_obj;
 };
 
@@ -2141,12 +2145,18 @@ bool JSONParser::do_infer_schema()
 		return false;
 	std::string sample(SAMPLE_SIZE, '\0');
 	sample.resize(m_reader->read(&sample[0], SAMPLE_SIZE));
+	double scale_factor = sample.size() == SAMPLE_SIZE ? (double)m_reader->filesize() / SAMPLE_SIZE : 0;
+
 	close();
 
 	JSONDispatcher json;
 	JSONInferValue value;
 	json.parse_string(sample.data(), &value);
-	return value.create_top_schema(m_schema);
+	bool is_ok = value.create_top_schema(m_schema);
+	if (is_ok && scale_factor != 0) {
+		m_schema.nrows *= scale_factor;
+	}
+	return is_ok;
 }
 
 bool XMLParser::do_infer_schema()
@@ -2158,11 +2168,16 @@ bool XMLParser::do_infer_schema()
 		return false;
 	std::string sample(SAMPLE_SIZE, '\0');
 	sample.resize(m_reader->read(&sample[0], SAMPLE_SIZE));
+	double scale_factor = sample.size() == SAMPLE_SIZE ? (double)m_reader->filesize() / SAMPLE_SIZE : 0;
 	close();
 
 	XMLInferHandler handler;
 	handler.parse(sample);
-	return handler.get_value().create_file_schema(get_schema()->fields);
+	bool is_ok = handler.get_value().create_file_schema(*get_schema());
+	if (is_ok && scale_factor != 0) {
+		m_schema.nrows *= scale_factor;
+	}
+	return is_ok;
 }
 
 bool ParserImpl::infer_schema()
