@@ -330,6 +330,10 @@ found_bad_quote:
 	is_inferring = false;
 	m_columns.clear();
 	do_infer_table(comment, rows);
+	m_schema.nrows = rows.size() - (m_schema.header_row >= 0);
+	if (n_rows > STANDARD_VECTOR_SIZE) {
+		m_schema.nrows *= (double)m_reader->filesize() / (m_reader->tell() - (end - cur));
+	}
 	// close();
 
 //	if (std::regex_match(m_schema.newline, _re_universal_newlines))
