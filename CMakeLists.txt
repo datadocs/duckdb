@@ -846,6 +846,13 @@ function(link_extension_libraries LIBRARY LINKAGE)
   # Now link against any registered out-of-tree extensions
   foreach(EXT_NAME IN LISTS STATICALLY_LINKED_EXTENSIONS)
     string(TOUPPER ${EXT_NAME} EXT_NAME_UPPERCASE)
+    # region Patch the visibility for internal extensions
+    # force to link the datadocs extension with PUBLIC visibility to avoid errors in link stage:
+    # ub_test_common.cpp:(.text+0x1f143): undefined reference to `duckdb::LogicalType::ANY'
+    if(${EXT_NAME_UPPERCASE} STREQUAL "DATADOCS" AND ${LINKAGE} STREQUAL "PRIVATE")
+      set(LINKAGE "PUBLIC")
+    endif()
+    # endregion
     if (${DUCKDB_EXTENSION_${EXT_NAME_UPPERCASE}_SHOULD_LINK})
       target_link_libraries(${LIBRARY} ${LINKAGE} ${EXT_NAME}_extension)
     endif()

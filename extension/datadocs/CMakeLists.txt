@@ -85,9 +85,9 @@ else()
   fetch_dependency(boost "cmake/boost/boost.txt.in")
 endif()
 
-##########################
-# simple_icu_init library
-##########################
+##################################
+#region simple_icu_init library
+##################################
 add_library(simple_icu_init STATIC src/simple_icu_init/simple_icu_init.cpp)
 
 # Includes
@@ -101,6 +101,10 @@ target_include_directories(simple_icu_init
 target_link_libraries(simple_icu_init
         # Publicly link to icu
         PUBLIC icu)
+
+##################################
+#endregion simple_icu_init library
+##################################
 
 add_subdirectory(geo)
 
@@ -136,7 +140,9 @@ set(DATADOCS_EXTENSION_FILES
 	zip_reader.cpp
 	${GEO_EXTENSION_FILES})
 
-add_library(datadocs_extension STATIC ${DATADOCS_EXTENSION_FILES})
+build_static_extension(datadocs ${DATADOCS_EXTENSION_FILES})
+# we don't provide a loadable extension
+# build_loadable_extension(datadocs ${DATADOCS_EXTENSION_FILES})
 
 # RapidJSON
 # The config logic in this if statement is used to build DuckDB with this extension 
@@ -169,10 +175,10 @@ if(Boost_FOUND AND DEFINED Boost_INCLUDE_DIRS)
 endif()
 
 target_link_libraries(datadocs_extension
-        PRIVATE zlib
-        PRIVATE expat
-        # Publicly link to icu
-        PRIVATE icu)
+  zlib
+  expat
+  icu)
+
 
 # Add compiler definitions from environment variables
 vars_to_definitions(datadocs_extension DATADOCS_DEBUG_)
