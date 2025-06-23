@@ -1,6 +1,6 @@
 ---
 author: hangxingliu
-updated_at: 2025-04-09 22:31:32
+updated_at: 2025-06-23 23:46:49
 ---
 # Syncing with Upstream
 
@@ -23,13 +23,11 @@ git clone --depth=1 https://github.com/datadocs/duckdb.git datadocs-duckdb-snaps
 # Then you can inspect the code in the directory `datadocs-duckdb-snapshot`
 ```
 
-
-
-## Instructions
+## Prerequisites
 
 Firstly, make sure you have added the URL of official repository in your git remote. Here is the command for it:
 ```bash
-git remote add upstream https://github.com/duckdb/duckdb.git
+git remote get-url upstream 2>/dev/null || git remote add upstream https://github.com/duckdb/duckdb.git
 ```
 
 
@@ -40,15 +38,38 @@ git fetch upstream
 ```
 
 
-We can first define two environment variables `LAST_VER` and `NEW_VER` to simplify the subsequent commands:
+## Regular Sync Check
+
+``` bash
+git checkout regular-sync
+
+# WARNING: please make sure all dirty changes have been backed up (`git stash save`) 
+#          before executing the following command:
+# for example: ingest-v1.3.1
+git reset --hard ingest-$LAST_VER
+
+# for example: main, orig/v1.3-ossivalis
+git rebase --interactive $UPSTREAM_COMMIT
+
+./scripts/build-duckdb-for-datadocs.sh release
+
+git push -f origin regular-sync
+```
+
+
+## Sync The New Release
+
+
+We can first define two environment variables `LAST_VER` and `NEW_VER` to simplify the subsequent commands. And if the base commit for the new version doesn't have a same name tag with `NEW_VER`, please define another variable `NEW_VER_GIT_REF`:
 
 ```bash
 # The version of last sync
-LAST_VER="v1.2.1"
+LAST_VER="v1.2.2"
 
 # The new version you want to sync from the upstream repo. 
 # Any branch name or tag name in upstream repo can be used here: (e.g., "main")
-NEW_VER="v1.2.2"
+NEW_VER="v1.3.1"
+NEW_VER_GIT_REF="78092e2226b3b0264873a52e1f8ef7cd01be1d77"; # v1.3-ossivalis
 ```
 
 Next, create a new branch to merge our changes into the new version of upstream source code:
@@ -58,12 +79,12 @@ git checkout ingest-$LAST_VER
 git checkout -b ingest-$NEW_VER
 
 # Tagging the target commit as a marker
-git tag -s -m "The base commit of Datadocs forked version ${NEW_VER}" "ingest-${NEW_VER}-base" "$NEW_VER";
+git tag -s -m "The base commit of Datadocs forked version ${NEW_VER}" "ingest-${NEW_VER}-base" "$NEW_VER_GIT_REF";
 
 # It is highly RECOMMENDED to rebase our changes into the target branch/tag by GUI program
 # to avoid elementary mistakes.
 # For example: Sublime Merge, GitKraken
-git rebase --interactive $NEW_VER
+git rebase --interactive $NEW_VER_GIT_REF
 ```
 
 > [!TIP]
@@ -77,7 +98,7 @@ git rebase --interactive $NEW_VER
 
 
 
-Next, after successfully rebasing the all changes into the target branch/tag, please do the following checks  :
+Next, after successfully rebasing the all changes into the target branch/tag, please do the following checks:
 
 1. Clean and rebuild DuckDB again: `make clean && ./scripts/build-duckdb-for-datadocs.sh release -${NEW_VER}`
 2. Run built DuckDB shell (bin file: `./build/release/duckdb`) perform at least the following tests:
@@ -94,10 +115,10 @@ Finally, you push this new branch to our forked repository:
 git push origin ingest-$NEW_VER
 
 # Push the base marker tag to the Github repo
-git push origin tag ingest-${NEW_VER}-base
+git push origin --force ingest-${NEW_VER}-base
 
 # If the new version is based on a Git tag, please also push this tag to the repo
 # for a reference purpose:
-git push origin tag $NEW_VER
+git push origin $NEW_VER
 ```
 
