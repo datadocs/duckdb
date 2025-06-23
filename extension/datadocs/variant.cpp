@@ -1923,8 +1923,8 @@ struct VariantCasts {
 
 	static bool VariantCastAny(Vector &source, Vector &result, idx_t count, CastParameters &parameters) {
 		auto &lstate = parameters.local_state->Cast<JSONFunctionLocalState>();
-		lstate.json_allocator.Reset();
-		auto alc = lstate.json_allocator.GetYYAlc();
+		lstate.json_allocator->Reset();
+		auto alc = lstate.json_allocator->GetYYAlc();
 
 		bool success = true;
 		UnifiedVectorFormat vdata, infodata, valuedata;

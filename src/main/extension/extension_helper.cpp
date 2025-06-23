@@ -57,10 +57,6 @@
 #define DUCKDB_EXTENSION_AUTOCOMPLETE_LINKED false
 #endif
 
-#ifndef DUCKDB_EXTENSION_DATADOCS_LINKED
-#define DUCKDB_EXTENSION_DATADOCS_LINKED false
-#endif
-
 // Load the generated header file containing our list of extension headers
 #if defined(GENERATED_EXTENSION_HEADERS) && GENERATED_EXTENSION_HEADERS && !defined(DUCKDB_AMALGAMATION)
 #include "duckdb/main/extension/generated_extension_loader.hpp"
@@ -124,7 +120,7 @@ static const DefaultExtension internal_extensions[] = {
     {"mysql_scanner", "Adds support for connecting to a MySQL database", false},
     {"sqlite_scanner", "Adds support for reading and writing SQLite database files", false},
     {"postgres_scanner", "Adds support for connecting to a Postgres database", false},
-	{"datadocs", "Datadocs functions", DUCKDB_EXTENSION_DATADOCS_LINKED},
+    {"datadocs", "Datadocs functions", DUCKDB_EXTENSION_DATADOCS_LINKED},
     {"inet", "Adds support for IP-related data types and functions", false},
     {"spatial", "Geospatial extension that adds support for working with spatial data and functions", false},
     {"aws", "Provides features that depend on the AWS SDK", false},

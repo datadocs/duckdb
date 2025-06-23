@@ -1131,11 +1131,19 @@ unique_ptr<Expression> CreateBoundOperatorFuncExpression(ClientContext &context,
 	FunctionBinder function_binder(context);
 	auto best_function = function_binder.BindFunction(func.name, func.functions, types, error);
 	if (!best_function.IsValid()) {
-		string call_str = Function::CallToString(function_name, types);
+		string catalog_name;
+		string schema_name;
 		string candidate_str = "";
 		for (auto &f : func.functions.functions) {
+			if (catalog_name.empty() && !f.catalog_name.empty()) {
+				catalog_name = f.catalog_name;
+			}
+			if (schema_name.empty() && !f.schema_name.empty()) {
+				schema_name = f.schema_name;
+			}
 			candidate_str += "\t" + f.ToString() + "\n";
 		}
+		string call_str = Function::CallToString(catalog_name, schema_name, function_name, types);
 		string str_error =
 		    StringUtil::Format("No function matches the given name and argument types '%s'. You might need to add "
 		                       "explicit type casts.\n\tCandidate functions:\n%s",
