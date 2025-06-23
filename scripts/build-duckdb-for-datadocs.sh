@@ -4,15 +4,16 @@
 # Description:
 #
 #   A bash script for building DuckDB with the Datadocs extension
-#   (This script has been tested on Ubuntu 22.04 and MacOS Sonoma 14)
+#   (This script has been tested on Ubuntu 24.04 and MacOS Sonoma 14)
 # 
-# Usage: build-duckdb-for-datadocs.sh [debug|cldebug|release|...] [--shell] [-v${version}]
+# Usage: build-duckdb-for-datadocs.sh [debug|cldebug|release|...] [--shell] [--clean] [-v${version}]
 #
 #        --shell        open built duckdb shell after build done
+#        --clean        clean the target directory before building for a brand new build
 #        -v${version}   build duckdb with a explicit version string (e.g., -v1.2.1)
 #
 # Author:  Liu Yue @hangxingliu
-# Version: 2025-04-09
+# Version: 2026-06-23
 #
 # Required Softwares:
 #
@@ -41,14 +42,40 @@
 #        export HTTP_PROXY=http://127.0.0.1:8888
 #        export HTTPS_PROXY=http://127.0.0.1:8888
 #
-throw() { echo -e "fatal: $1" >&2; exit 1; }
-print_cmd() { printf "\$ %s\n" "$*" >&2; }
-execute() { print_cmd "$@"; "$@" || throw "Failed to execute '$1'"; }
-get_stdout() { print_cmd "$@"; get_stdout_result="$("$@")"; }
 
+# Define the path to the log file
 # this relative path is based on the root of the project
-log_file="./scripts/logs/build-$(date "+%Y%m%d-%H%M").log"; 
-open_duckdb_shell=
+log_file="./scripts/logs/build-$(date "+%Y%m%d-%H%M").log";
+has_log_file=false;
+
+# Define some basic functions
+throw() { 
+    echo -e "fatal: $1" >&2; 
+    $has_log_file && tell_user_where_is_the_log_file; 
+    exit 1;
+}
+tell_user_where_is_the_log_file() { printf "\n  log file: %s\n\n" "$log_file"; }
+printf_to_log_file() { $has_log_file && printf "$@" | tee -a "$log_file"; }
+print_cmd() { printf_to_log_file "\$ %s\n" "$*"; }
+execute() { 
+    print_cmd "$@"; 
+    "$@" || throw "Failed to execute '$1'";
+}
+get_stdout() { 
+    print_cmd "$@";
+    get_stdout_result="$("$@")";
+}
+execute_to_log_file() {
+    print_cmd "$@";
+    "${@}" 2>&1 | tee -a "$log_file";
+    exitcode="${PIPESTATUS[0]}";
+    [ "$exitcode" != 0 ] && throw "Failed to execute '$1' (exitcode=${exitcode})";
+}
+
+#
+# region Parse command line arguments
+open_duckdb_shell=false;
+do_clean=false;
 make_target=()
 explicit_version=
 parse_args() {
@@ -56,7 +83,8 @@ parse_args() {
     while [ "${#@}" -gt 0 ]; do
         arg="$1"; shift;
         case "$arg" in
-            --shell) open_duckdb_shell=1;;
+            --shell) open_duckdb_shell=true;;
+            --clean) do_clean=true;;
             -v) explicit_version="v${1}"; shift;;
             -v*) explicit_version="v${arg#'-v'}";;
             *) make_target+=( "$arg" );;
@@ -65,11 +93,20 @@ parse_args() {
 }
 parse_args "$@";
 [ "${#make_target[@]}" -gt 0 ] || make_target=( release );
+# endregion 
+#
 
+# Precheck required softwares
 command -v cmake >/dev/null || throw "cmake is not installed!";
 command -v ninja >/dev/null || throw "ninja is not installed!";
 
-# Using Clang as the compiler
+# Change current working directory to the root of DuckDB project
+pushd "$( dirname -- "${BASH_SOURCE[0]}" )/.." >/dev/null || exit 1;
+execute mkdir -p "$(dirname -- "${log_file}")";
+has_log_file=true;
+printf_to_log_file "cli args: %s\n" "$*";
+
+# Using Clang as the compiler by default
 if [ -z "$CC" ]; then
     CLANG="$(command -v clang)";
     [ -z "$CLANG" ] && CLANG="$(command -v clang-19)";
@@ -85,12 +122,14 @@ if [ -z "$CXX" ]; then
     execute export CXX="${CLANG}"
 fi
 
-pushd "$( dirname -- "${BASH_SOURCE[0]}" )/.." >/dev/null || exit 1;
-execute mkdir -p "$(dirname -- "${log_file}")";
+# Dump the environment
+execute_to_log_file uname -a;
+execute_to_log_file "$CC" --version;
+execute_to_log_file "$CXX" --version;
+[ -d .git ] && execute_to_log_file git log -n1;
 
-#
+
 # Set explicit version string
-#
 if [ -n "$explicit_version" ]; then
     get_stdout git log -n 1 --format=%h;
     git_describe="v${explicit_version#'v'}-0-g${get_stdout_result}";
@@ -118,27 +157,23 @@ execute export GEN=ninja;
 # https://cmake.org/cmake/help/latest/envvar/CMAKE_BUILD_PARALLEL_LEVEL.html
 # execute export CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)";
 
-SECONDS=0
-printf "\n  log file: %s\n\n" "$log_file";
+if $do_clean; then execute_to_log_file make clean; fi
+
+SECONDS=0;
+tell_user_where_is_the_log_file;
 
 #
-# the main command for building:
+#   ____    ___    ____    _____ 
+#  / ___|  / _ \  |  _ \  | ____|
+# | |     | | | | | |_) | |  _|  
+# | |___  | |_| | |  _ <  | |___ 
+#  \____|  \___/  |_| \_\ |_____|
 #
-# make release
-#
-make_cmd=( make "-j$(nproc)" "${make_target[@]}" );
-print_cmd "${make_cmd[@]}" | tee "${log_file}";
-"${make_cmd[@]}" 2>&1 | tee -a "${log_file}";
+# the core command for building:
+#   make release
+execute_to_log_file make "-j$(nproc)" "${make_target[@]}";
 
-exitcode="${PIPESTATUS[0]}"
-if [ "$exitcode" != 0 ]; then
-    printf "\n  log file: %s\n\n" "$log_file";
-    throw "Failed to build";
-fi
-
-echo "";
-echo "build done: +${SECONDS}s"
-echo "";
+printf_to_log_file "\n  build done: +%ss\n\n" "${SECONDS}";
 
 # Executing the built DuckDB shell for testing
-if [ -n "$open_duckdb_shell" ]; then execute ./build/release/duckdb; fi
+if $open_duckdb_shell; then execute "./build/${make_target[0]}/duckdb"; fi
