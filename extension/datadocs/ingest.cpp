@@ -8,6 +8,21 @@
 #include "inferrer_impl.h"
 #include "json_common.hpp"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+// Reads a cancel flag the main thread sets on a SharedArrayBuffer that is bridged
+// onto the emscripten Module as `ddCancelFlag` (an Int32Array). Atomics.load makes
+// the main thread's write visible to this (worker) thread with no message
+// round-trip — the only way to interrupt a synchronously-running scan in the
+// single-threaded (non-pthread, non-asyncify) WASM build. Returns 0 when the flag
+// was never wired, so this is a no-op until the JS side sets Module.ddCancelFlag.
+EM_JS(int, dd_cancel_requested, (), {
+	return (Module["ddCancelFlag"] && Atomics.load(Module["ddCancelFlag"], 0)) ? 1 : 0;
+});
+#else
+static inline int dd_cancel_requested() { return 0; }
+#endif
+
 namespace duckdb {
 
 namespace {
@@ -96,6 +111,15 @@ static unique_ptr<GlobalTableFunctionState> IngestInit(ClientContext &context, T
 static void IngestImpl(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<IngestBindData>();
 	auto &parser = *bind_data.parser;
+	// Cooperative cancellation: the pipeline pulls one chunk per call, so polling
+	// the main-thread cancel flag here bails a runaway scan within a single chunk
+	// (~2048 rows) of the user hitting Cancel. Also set context.interrupted so the
+	// executor tears down any sibling pipelines. dd_cancel_requested() is 0 on
+	// native builds and until the JS side wires Module.ddCancelFlag.
+	if (dd_cancel_requested()) {
+		context.interrupted = true;
+		throw InterruptException();
+	}
 	if (parser.is_finished) {
 		return;
 	}
