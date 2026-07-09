@@ -108,6 +108,18 @@ static unique_ptr<GlobalTableFunctionState> IngestInit(ClientContext &context, T
 	return nullptr;
 }
 
+/// Cardinality ESTIMATE for an ingest scan. The real row count is unknown
+/// before the scan, but this estimate drives the progress bar's per-pipeline
+/// weighting (Pipeline::GetProgress normalizes each pipeline's progress to its
+/// source's estimated cardinality): with no estimate the scan pipeline got
+/// weight 1 — equal to the trivial post-scan pipelines — so the bar capped at
+/// ~33% mid-scan and froze there until the query finished. A deliberately
+/// large constant makes the scan (the actual long-running part) dominate the
+/// weighting; the number itself is never shown to users.
+static unique_ptr<NodeStatistics> IngestCardinality(ClientContext &context, const FunctionData *bind_data_p) {
+	return make_uniq<NodeStatistics>(10000000ULL);
+}
+
 /// Source-scan progress for DuckDB's progress bar (0-100, negative = unknown).
 /// Every Parser implementation already tracks its reader position
 /// (get_percent_complete: CSV/JSON/XML = byte position %, XLS = row %, ZIP =
@@ -181,8 +193,10 @@ void DatadocsExtension::LoadIngest(DatabaseInstance &inst) {
 	TableFunctionSet ingest_set("ingest_file");
 	TableFunction ingest_one({LogicalType::VARCHAR}, IngestImpl, IngestBind, IngestInit);
 	ingest_one.table_scan_progress = IngestProgress;
+	ingest_one.cardinality = IngestCardinality;
 	TableFunction ingest_two({LogicalType::VARCHAR, DDJsonType}, IngestImpl, IngestBind, IngestInit);
 	ingest_two.table_scan_progress = IngestProgress;
+	ingest_two.cardinality = IngestCardinality;
 	ingest_set.AddFunction(std::move(ingest_one));
 	ingest_set.AddFunction(std::move(ingest_two));
 	ExtensionUtil::RegisterFunction(inst, ingest_set);
