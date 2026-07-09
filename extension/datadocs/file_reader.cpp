@@ -314,7 +314,15 @@ int BaseReader::pos_percent()
 {
 	if (m_content.size == 0)
 		return 0;
-	return (int)((double)tell() * 100 / m_content.size);
+	// Progress = bytes FETCHED from the underlying file so far, not `tell()`:
+	// the logical parse position goes stale on the unbuffered fast path
+	// (BASEREADER_READ_FLAG_NO_BUF reads only advance m_position_next_read),
+	// which pinned ingest scan progress at 0% for entire multi-GB scans. The
+	// read-ahead skew of using the fetch position is at most one buffer.
+	size_t consumed = m_position_next_read;
+	if (consumed > m_content.size)
+		consumed = m_content.size;
+	return (int)((double)consumed * 100 / m_content.size);
 }
 
 FileReader::FileReader(const std::string& filename, ClientContext &context) :

@@ -108,6 +108,24 @@ static unique_ptr<GlobalTableFunctionState> IngestInit(ClientContext &context, T
 	return nullptr;
 }
 
+/// Source-scan progress for DuckDB's progress bar (0-100, negative = unknown).
+/// Every Parser implementation already tracks its reader position
+/// (get_percent_complete: CSV/JSON/XML = byte position %, XLS = row %, ZIP =
+/// inner parser's %), so this simply exposes it to the executor — which makes
+/// the wasm bridge's ProgressBarDisplay fire real percentages for ingest scans.
+static double IngestProgress(ClientContext &context, const FunctionData *bind_data_p,
+                             const GlobalTableFunctionState *global_state) {
+	auto &bind_data = bind_data_p->Cast<IngestBindData>();
+	if (!bind_data.parser) {
+		return -1;
+	}
+	int percent = bind_data.parser->get_percent_complete();
+	if (percent < 0) {
+		return -1;
+	}
+	return static_cast<double>(percent > 100 ? 100 : percent);
+}
+
 static void IngestImpl(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<IngestBindData>();
 	auto &parser = *bind_data.parser;
@@ -161,8 +179,12 @@ unique_ptr<TableRef> ReadIngestReplacement(ClientContext &context, ReplacementSc
 
 void DatadocsExtension::LoadIngest(DatabaseInstance &inst) {
 	TableFunctionSet ingest_set("ingest_file");
-	ingest_set.AddFunction(TableFunction({LogicalType::VARCHAR}, IngestImpl, IngestBind, IngestInit));
-	ingest_set.AddFunction(TableFunction({LogicalType::VARCHAR, DDJsonType}, IngestImpl, IngestBind, IngestInit));
+	TableFunction ingest_one({LogicalType::VARCHAR}, IngestImpl, IngestBind, IngestInit);
+	ingest_one.table_scan_progress = IngestProgress;
+	TableFunction ingest_two({LogicalType::VARCHAR, DDJsonType}, IngestImpl, IngestBind, IngestInit);
+	ingest_two.table_scan_progress = IngestProgress;
+	ingest_set.AddFunction(std::move(ingest_one));
+	ingest_set.AddFunction(std::move(ingest_two));
 	ExtensionUtil::RegisterFunction(inst, ingest_set);
 
 	auto &config = DBConfig::GetConfig(inst);
