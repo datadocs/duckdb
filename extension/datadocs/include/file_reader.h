@@ -58,7 +58,13 @@ public:
 	BaseReader(const std::string& filename);
 	virtual ~BaseReader();
 	const std::string& filename() { return m_filename; }
-	size_t filesize() { return m_content.size; }
+	/// True size of the underlying file. 64-bit on purpose: `size_t` is 32 bits
+	/// in wasm32, so a >4GB file's size silently truncated mod 2^32 (a 4.98GB
+	/// CSV reported 656MB), which broke pos_percent (progress hit "100%" after
+	/// the first 656MB) and the tail read-back heuristic. Streamed positions
+	/// below are 64-bit for the same reason. `m_content.size` (in-memory buffer,
+	/// inherently <4GB in wasm32) stays size_t for the read_all/ZIP/XLS paths.
+	uint64_t filesize() { return m_file_size ? m_file_size : (uint64_t)m_content.size; }
 	bool is_open() { return m_is_open; }
 	virtual bool is_file() = 0;
 
@@ -66,8 +72,8 @@ public:
 	bool open();
 	void close();
 	size_t read(char* buffer, size_t size, uint8_t flag = 0x00);
-	size_t tell() const;
-	bool seek(size_t location);
+	uint64_t tell() const;
+	bool seek(uint64_t location);
 
 	bool skip_prefix(const std::string_view &prefix);
 	const char* peek_start(size_t length);
@@ -89,18 +95,20 @@ protected:
 	bool underflow(size_t desired_bytes);
 	virtual bool do_open() = 0;
 	virtual void do_close() = 0;
-	virtual bool do_seek(size_t location) = 0;
+	virtual bool do_seek(uint64_t location) = 0;
 	virtual int do_read(char *buffer, size_t size) = 0;
 
 	std::string m_filename;
 	xls::MemBuffer m_content;
+	/// See filesize(): 64-bit true size for file-backed readers (0 = use m_content.size).
+	uint64_t m_file_size = 0;
 	bool m_is_open = false;
 
 private:
 	/// @brief (Invalidate the buffer) Reset pointers related to the buffer
 	/// @param position_buf (The new position value for the members:
 	///        `m_position_buf` and `m_position_next_read`)
-	void reset_buffer(size_t position_buf);
+	void reset_buffer(uint64_t position_buf);
 	size_t consume_buffer(char* dest, size_t max_bytes);
 
 	const char *m_read_pos;
@@ -114,13 +122,14 @@ private:
 	char *m_buffer;
 	size_t m_buf_size;
 	/// @brief The position of `m_buffer[0]` in the original file .
-	size_t m_position_buf;
-	size_t m_position_next_read;
+	/// 64-bit: streamed positions exceed 4GB on large files (see filesize()).
+	uint64_t m_position_buf;
+	uint64_t m_position_next_read;
 
 	uint8_t m_optimization_read_backward;
 
 	bool m_enabled_async_seek;
-	long m_pending_async_seek;
+	int64_t m_pending_async_seek;
 	bool handle_async_seek();
 };
 
@@ -133,7 +142,7 @@ public:
 protected:
 	virtual bool do_open() override;
 	virtual void do_close() override;
-	virtual bool do_seek(size_t location) override;
+	virtual bool do_seek(uint64_t location) override;
 	virtual int do_read(char *buffer, size_t size) override;
 
 	FileSystem &fs;

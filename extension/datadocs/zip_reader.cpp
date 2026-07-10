@@ -54,8 +54,8 @@ protected:
 		return unzReadCurrentFile(m_zip, buffer, size);
 	}
 
-	virtual bool do_seek(size_t location) override {
-		debug_file_io("ZipReader::do_seek(%zu) NOT_SUPPORTED", location);
+	virtual bool do_seek(uint64_t location) override {
+		debug_file_io("ZipReader::do_seek(%llu) NOT_SUPPORTED", (unsigned long long)location);
 		return false;
 	}
 

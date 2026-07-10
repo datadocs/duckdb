@@ -21,7 +21,7 @@ BaseReader::~BaseReader() {
 		close();
 }
 
-void BaseReader::reset_buffer(size_t position_buf) {
+void BaseReader::reset_buffer(uint64_t position_buf) {
 	m_position_buf = m_position_next_read = position_buf;
 	m_read_pos = m_read_end = m_buffer;
 	m_pending_async_seek = -1;
@@ -184,9 +184,9 @@ bool BaseReader::underflow() {
 
 		if(m_position_next_read > 0) {
 			// The optimization for reading the tail
-			size_t len_to_the_tail = filesize() - m_position_next_read;
+			uint64_t len_to_the_tail = filesize() - m_position_next_read;
 			if (len_to_the_tail < m_buf_size)
-				read_back = m_buf_size - len_to_the_tail;
+				read_back = m_buf_size - (size_t)len_to_the_tail;
 			// The optimization for backward many times
 			else if (m_optimization_read_backward >= 2) {
 				read_back = m_buf_size >> 1; // 1/2 of the buffer
@@ -194,9 +194,9 @@ bool BaseReader::underflow() {
 			}
 
 			if (read_back > 0) {
-				read_back = std::min(read_back, m_position_next_read);
+				read_back = (size_t)std::min<uint64_t>(read_back, m_position_next_read);
 
-				size_t location = (size_t)m_position_next_read - read_back;
+				uint64_t location = m_position_next_read - read_back;
 				debug_file_io("BaseReader::seek(read_back at %zu) -%zu", m_position_next_read, read_back);
 
 				if (do_seek(location)) {
@@ -271,11 +271,11 @@ xls::MemBuffer* BaseReader::read_all()
 	return &m_content;
 }
 
-size_t BaseReader::tell() const {
-	return m_position_buf + (m_buffer ? (m_read_pos - m_buffer) : 0);
+uint64_t BaseReader::tell() const {
+	return m_position_buf + (m_buffer ? (uint64_t)(m_read_pos - m_buffer) : 0);
 }
 
-bool BaseReader::seek(size_t location) {
+bool BaseReader::seek(uint64_t location) {
 	if (m_buffer && location >= m_position_buf && location < m_position_buf + current_buffer_size()) {
 		// seek in the buffer
 		size_t offset = location - m_position_buf;
@@ -312,17 +312,21 @@ bool BaseReader::seek(size_t location) {
 
 int BaseReader::pos_percent()
 {
-	if (m_content.size == 0)
-		return 0;
 	// Progress = bytes FETCHED from the underlying file so far, not `tell()`:
 	// the logical parse position goes stale on the unbuffered fast path
 	// (BASEREADER_READ_FLAG_NO_BUF reads only advance m_position_next_read),
 	// which pinned ingest scan progress at 0% for entire multi-GB scans. The
 	// read-ahead skew of using the fetch position is at most one buffer.
-	size_t consumed = m_position_next_read;
-	if (consumed > m_content.size)
-		consumed = m_content.size;
-	return (int)((double)consumed * 100 / m_content.size);
+	// Both terms are 64-bit: with the old size_t math a 4.98GB file's size
+	// wrapped to 656MB, so the bar hit "100%" after the first 656MB and parked
+	// there for the remaining ~87% of the scan.
+	uint64_t total = filesize();
+	if (total == 0)
+		return 0;
+	uint64_t consumed = m_position_next_read;
+	if (consumed > total)
+		consumed = total;
+	return (int)((double)consumed * 100 / total);
 }
 
 FileReader::FileReader(const std::string& filename, ClientContext &context) :
@@ -333,8 +337,12 @@ FileReader::FileReader(const std::string& filename, ClientContext &context) :
 bool FileReader::do_open()
 {
 	file_handle = fs.OpenFile(m_filename.data(), FileFlags::FILE_FLAGS_READ);
-	idx_t size = file_handle->GetFileSize();
-	m_content.size = size < 0 ? 0 : size;
+	int64_t size = file_handle->GetFileSize();
+	// True size is 64-bit; m_content.size (size_t, 32-bit in wasm32) is only
+	// the read_all() allocation size, clamped — a >4GB file can't be slurped
+	// into memory there anyway (ZIP/XLS paths reject it on allocation).
+	m_file_size = size < 0 ? 0 : (uint64_t)size;
+	m_content.size = (size_t)MinValue<uint64_t>(m_file_size, (uint64_t)SIZE_MAX);
 	if (file_handle->CanSeek()) {
 		file_handle->Reset();
 	}
@@ -355,7 +363,7 @@ int FileReader::do_read(char* buffer, size_t size)
 	return file_handle->Read(buffer, size);
 }
 
-bool FileReader::do_seek(size_t location) {
+bool FileReader::do_seek(uint64_t location) {
 	if (file_handle) {
 		file_handle->Seek(location);
 		return true;
