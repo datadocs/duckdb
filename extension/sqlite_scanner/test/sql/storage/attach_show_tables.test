@@ -1,0 +1,11 @@
+# name: test/sql/storage/attach_show_tables.test
+# description:
+# group: [sqlite_storage]
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'data/db/sakila.db' AS sakila (TYPE SQLITE, READ_ONLY)
+
+statement ok
+SHOW TABLES

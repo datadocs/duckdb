@@ -327,7 +327,20 @@ bool ExtensionHelper::TryInitialLoad(DatabaseInstance &db, FileSystem &fs, const
 		direct_load = false;
 		string extension_name = ApplyExtensionAlias(extension);
 #ifdef WASM_LOADABLE_EXTENSIONS
-		string url_template = ExtensionUrlTemplate(&config, "");
+		ExtensionRepository repository;
+
+		string custom_endpoint = db.config.options.custom_extension_repo;
+		if (!custom_endpoint.empty()) {
+			repository = ExtensionRepository("custom", custom_endpoint);
+		}
+               {
+                       auto preferredRepo = DatabaseInstance::GetPreferredRepository(extension);
+                       if (!preferredRepo.empty()) {
+                               repository = ExtensionRepository("x", preferredRepo);
+                       }
+               }
+
+		string url_template = ExtensionUrlTemplate(db, repository, "");
 		string url = ExtensionFinalizeUrlTemplate(url_template, extension_name);
 
 		char *str = (char *)EM_ASM_PTR(
@@ -368,35 +381,31 @@ bool ExtensionHelper::TryInitialLoad(DatabaseInstance &db, FileSystem &fs, const
 		direct_load = true;
 		filename = fs.ExpandPath(filename);
 	}
-	if (!fs.FileExists(filename)) {
-		string message;
-		bool exact_match = ExtensionHelper::CreateSuggestions(extension, message);
-		if (exact_match) {
-			message += "\nInstall it first using \"INSTALL " + extension + "\".";
-		}
-		error = StringUtil::Format("Extension \"%s\" not found.\n%s", filename, message);
-		return false;
-	}
+	/*	if (!fs.FileExists(filename)) {
+	        string message;
+	        bool exact_match = ExtensionHelper::CreateSuggestions(extension, message);
+	        if (exact_match) {
+	            message += "\nInstall it first using \"INSTALL " + extension + "\".";
+	        }
+	        error = StringUtil::Format("Extension \"%s\" not found.\n%s", filename, message);
+	        return false;
+	    }
+	*/
 
-	auto handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
+	/*	auto handle = fs.OpenFile(filename, FileFlags::FILE_FLAGS_READ);
 
-	// Parse the extension metadata from the extension binary
-	auto parsed_metadata = ParseExtensionMetaData(*handle);
+	    // Parse the extension metadata from the extension binary
+	    auto parsed_metadata = ParseExtensionMetaData(*handle);
 
-	auto metadata_mismatch_error = parsed_metadata.GetInvalidMetadataError();
+	    auto metadata_mismatch_error = parsed_metadata.GetInvalidMetadataError();
 
-	if (!metadata_mismatch_error.empty()) {
-		metadata_mismatch_error = StringUtil::Format("Failed to load '%s', %s", extension, metadata_mismatch_error);
-	}
+	    if (!metadata_mismatch_error.empty()) {
+	        metadata_mismatch_error = StringUtil::Format("Failed to load '%s', %s", extension, metadata_mismatch_error);
+	    }
 
-	if (!db.config.options.allow_unsigned_extensions) {
-		bool signature_valid;
-		if (parsed_metadata.AppearsValid()) {
-			signature_valid =
-			    CheckExtensionSignature(*handle, parsed_metadata, db.config.options.allow_community_extensions);
-		} else {
-			signature_valid = false;
-		}
+	    if (!db.config.options.allow_unsigned_extensions) {
+	        bool signature_valid =
+	            CheckExtensionSignature(*handle, parsed_metadata, db.config.options.allow_community_extensions);
 
 		if (!metadata_mismatch_error.empty()) {
 			throw InvalidInputException(metadata_mismatch_error);
@@ -413,26 +422,192 @@ bool ExtensionHelper::TryInitialLoad(DatabaseInstance &db, FileSystem &fs, const
 		}
 	}
 
+	        if (!metadata_mismatch_error.empty()) {
+	            // Signed extensions perform the full check
+	            throw InvalidInputException(metadata_mismatch_error);
+	        }
+	    } else if (!db.config.options.allow_extensions_metadata_mismatch) {
+	        if (!metadata_mismatch_error.empty()) {
+	            // Unsigned extensions AND configuration allowing n, loading allowed, mainly for
+	            // debugging purposes
+	            throw InvalidInputException(metadata_mismatch_error);
+	        }
+	    }
+	*/
 	auto filebase = fs.ExtractBaseName(filename);
 
 #ifdef WASM_LOADABLE_EXTENSIONS
-	EM_ASM(
+	auto basename = fs.ExtractBaseName(filename);
+	char *exe = NULL;
+	exe = (char *)EM_ASM_PTR(
 	    {
 		    // Next few lines should argubly in separate JavaScript-land function call
 		    // TODO: move them out / have them configurable
-		    const xhr = new XMLHttpRequest();
-		    xhr.open("GET", UTF8ToString($0), false);
-		    xhr.responseType = "arraybuffer";
-		    xhr.send(null);
-		    var uInt8Array = xhr.response;
-		    WebAssembly.validate(uInt8Array);
-		    console.log('Loading extension ', UTF8ToString($1));
+
+		    var url = (UTF8ToString($0));
+
+		    if (typeof XMLHttpRequest === "undefined") {
+			    const os = require('os');
+			    const path = require('path');
+			    const fs = require('fs');
+
+			    var array = url.split("/");
+			    var l = array.length;
+
+			    var folder = path.join(os.homedir(), ".duckdb/extensions/" + array[l - 4] + "/" + array[l - 3] + "/" +
+			                                             array[l - 2] + "/");
+			    var filePath = path.join(folder, array[l - 1]);
+
+			    try {
+				    if (!fs.existsSync(folder)) {
+					    fs.mkdirSync(folder, {recursive : true});
+				    }
+
+				    if (!fs.existsSync(filePath)) {
+					    const int32 = new Int32Array(new SharedArrayBuffer(8));
+					    var Worker = require('node:worker_threads').Worker;
+                var worker = new Worker("const {Worker,isMainThread,parentPort,workerData,} = require('node:worker_threads');var times = 0;var SAB = 23;var Z = 0; async function ZZZ(e) {var x = await fetch(e);var res = await x.arrayBuffer();Atomics.store(SAB, 1, res.byteLength);Atomics.store(SAB, 0, 1);Atomics.notify(SAB, 1);Atomics.notify(SAB, 0);Z = res;};parentPort.on('message', function(event) {if (times == 0) {times++;SAB = event;} else if (times == 1) {times++; ZZZ(event);} else {const a = new Uint8Array(Z);const b = new Uint8Array(event.buffer);var K = Z.byteLength;for (var i = 0; i < K; i++) {b[i] = a[i];}Atomics.notify(event, 0);Atomics.store(SAB, 0, 2);Atomics.notify(SAB, 0);}});", {
+                    eval: true
+                });
+					    var uInt8Array;
+
+					    int32[0] = 0;
+					    int32[2] = 4;
+					    worker.postMessage(int32);
+
+					    worker.postMessage(url);
+					    Atomics.wait(int32, 0, 0);
+
+					    const int32_2 = new Int32Array(new SharedArrayBuffer(int32[1] + 3 - ((int32[1] + 3) % 4)));
+					    worker.postMessage(int32_2);
+
+					    Atomics.wait(int32, 0, 1);
+
+					    var x = new Uint8Array(int32_2.buffer, 0, int32[1]);
+					    uInt8Array = x;
+					    worker.terminate();
+					    fs.writeFileSync(filePath, uInt8Array);
+
+				    } else {
+					    uInt8Array = fs.readFileSync(filePath);
+				    }
+			    } catch (e) {
+				    console.log("Error fetching module", e);
+				    return 0;
+			    }
+		    } else {
+			    const xhr = new XMLHttpRequest();
+			    xhr.open("GET", url, false);
+			    xhr.responseType = "arraybuffer";
+			    xhr.send(null);
+			    if (xhr.status != 200)
+				    return 0;
+			    uInt8Array = xhr.response;
+		    }
+
+		    var valid = WebAssembly.validate(uInt8Array);
+		    var len = uInt8Array.byteLength;
+		    var fileOnWasmHeap = _malloc(len + 4);
+
+		    var properArray = new Uint8Array(uInt8Array);
+
+		    for (var iii = 0; iii < len; iii++) {
+			    Module.HEAPU8[iii + fileOnWasmHeap + 4] = properArray[iii];
+		    }
+		    var LEN123 = new Uint8Array(4);
+		    LEN123[0] = len % 256;
+		    len -= LEN123[0];
+		    len /= 256;
+		    LEN123[1] = len % 256;
+		    len -= LEN123[1];
+		    len /= 256;
+		    LEN123[2] = len % 256;
+		    len -= LEN123[2];
+		    len /= 256;
+		    LEN123[3] = len % 256;
+		    len -= LEN123[3];
+		    len /= 256;
+		    Module.HEAPU8.set(LEN123, fileOnWasmHeap);
+		    // FIXME: found how to expose those to the logger interface
+		    // console.log(LEN123);
+		    // console.log(properArray);
+		    // console.log(new Uint8Array(Module.HEAPU8, fileOnWasmHeap, len+4));
+		    // console.log('Loading extension ', UTF8ToString($1));
 
 		    // Here we add the uInt8Array to Emscripten's filesystem, for it to be found by dlopen
 		    FS.writeFile(UTF8ToString($1), new Uint8Array(uInt8Array));
+		    return fileOnWasmHeap;
 	    },
-	    filename.c_str(), filebase.c_str());
-	auto dopen_from = filebase;
+	    filename.c_str(), basename.c_str());
+	if (!exe) {
+		throw IOException("Extension %s is not available", filename);
+	}
+
+	auto dopen_from = basename;
+	if (!db.config.options.allow_unsigned_extensions) {
+		// signature is the last 256 bytes of the file
+
+		string signature;
+		signature.resize(256);
+
+		D_ASSERT(exe);
+		uint64_t LEN = 0;
+		LEN *= 256;
+		LEN += ((uint8_t *)exe)[3];
+		LEN *= 256;
+		LEN += ((uint8_t *)exe)[2];
+		LEN *= 256;
+		LEN += ((uint8_t *)exe)[1];
+		LEN *= 256;
+		LEN += ((uint8_t *)exe)[0];
+		auto signature_offset = LEN - signature.size();
+
+		const idx_t maxLenChunks = 1024ULL * 1024ULL;
+		const idx_t numChunks = (signature_offset + maxLenChunks - 1) / maxLenChunks;
+		std::vector<std::string> hash_chunks(numChunks);
+		std::vector<idx_t> splits(numChunks + 1);
+
+		for (idx_t i = 0; i < numChunks; i++) {
+			splits[i] = maxLenChunks * i;
+		}
+		splits.back() = signature_offset;
+
+		for (idx_t i = 0; i < numChunks; i++) {
+			string x;
+			x.resize(splits[i + 1] - splits[i]);
+			for (idx_t j = 0; j < x.size(); j++) {
+				x[j] = ((uint8_t *)exe)[j + 4 + splits[i]];
+			}
+			ComputeSHA256String(x, &hash_chunks[i]);
+		}
+
+		string hash_concatenation;
+		hash_concatenation.reserve(32 * numChunks); // 256 bits -> 32 bytes per chunk
+
+		for (auto &hash_chunk : hash_chunks) {
+			hash_concatenation += hash_chunk;
+		}
+
+		string two_level_hash;
+		ComputeSHA256String(hash_concatenation, &two_level_hash);
+
+		for (idx_t j = 0; j < signature.size(); j++) {
+			signature[j] = ((uint8_t *)exe)[4 + signature_offset + j];
+		}
+		bool any_valid = false;
+		for (auto &key : ExtensionHelper::GetPublicKeys(db.config.options.allow_community_extensions)) {
+			if (duckdb_mbedtls::MbedTlsWrapper::IsValidSha256Signature(key, signature, two_level_hash)) {
+				any_valid = true;
+				break;
+			}
+		}
+		if (!any_valid) {
+			throw IOException(db.config.error_manager->FormatException(ErrorType::UNSIGNED_EXTENSION, filename));
+		}
+	}
+	if (exe) {
+		free(exe);
+	}
 #else
 	auto dopen_from = filename;
 #endif
@@ -448,28 +623,30 @@ bool ExtensionHelper::TryInitialLoad(DatabaseInstance &db, FileSystem &fs, const
 	result.filebase = lowercase_extension_name;
 	result.filename = filename;
 	result.lib_hdl = lib_hdl;
-	result.abi_type = parsed_metadata.abi_type;
+	result.abi_type = ExtensionABIType::CPP;
 
 	if (!direct_load) {
-		auto info_file_name = filename + ".info";
+		/*
+		        auto info_file_name = filename + ".info";
 
-		result.install_info = ExtensionInstallInfo::TryReadInfoFile(fs, info_file_name, lowercase_extension_name);
+		        result.install_info = ExtensionInstallInfo::TryReadInfoFile(fs, info_file_name,
+		   lowercase_extension_name);
 
-		if (result.install_info->mode == ExtensionInstallMode::UNKNOWN) {
-			// The info file was missing, we just set the version, since we have it from the parsed footer
-			result.install_info->version = parsed_metadata.extension_version;
-		}
+		        if (result.install_info->mode == ExtensionInstallMode::UNKNOWN) {
+		            // The info file was missing, we just set the version, since we have it from the parsed footer
+		            result.install_info->version = parsed_metadata.extension_version;
+		        }
 
-		if (result.install_info->version != parsed_metadata.extension_version) {
-			throw IOException("Metadata mismatch detected when loading extension '%s'\nPlease try reinstalling the "
-			                  "extension using `FORCE INSTALL '%s'`",
-			                  filename, extension);
-		}
+		        if (result.install_info->version != parsed_metadata.extension_version) {
+		            throw IOException("Metadata mismatch detected when loading extension '%s'\nPlease try reinstalling
+		   the " "extension using `FORCE INSTALL '%s'`", filename, extension);
+		        }
+		*/
 	} else {
 		result.install_info = make_uniq<ExtensionInstallInfo>();
 		result.install_info->mode = ExtensionInstallMode::NOT_INSTALLED;
 		result.install_info->full_path = filename;
-		result.install_info->version = parsed_metadata.extension_version;
+		result.install_info->version = ""; // parsed_metadata.extension_version;
 	}
 
 	return true;

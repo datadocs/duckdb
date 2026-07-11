@@ -1,0 +1,22 @@
+# name: test/sql/storage/attach_sqlite_view.test
+# description:
+# group: [sqlite_storage]
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'data/db/unsupported_view.db' AS s (TYPE SQLITE, READ_ONLY)
+
+statement ok
+USE s;
+
+query I
+SHOW TABLES
+----
+ts
+whoops
+
+query I
+SELECT * FROM s.ts
+----
+1726099200

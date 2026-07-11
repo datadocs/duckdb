@@ -116,11 +116,15 @@ void SetArrowFormat(DuckDBArrowSchemaHolder &root_holder, ArrowSchema &child, co
                     ClientProperties &options, ClientContext &context) {
 	if (type.HasAlias()) {
 		// If it is a json type, we only export it as json if arrow_lossless_conversion = True
-		if (!(type.IsJSONType() && !options.arrow_lossless_conversion)) {
-			// If the type has an alias, we check if it is an Arrow-Type extension
-			if (SetArrowExtension(root_holder, child, type, context)) {
-				return;
-			}
+		// if (!(type.IsJSONType() && !options.arrow_lossless_conversion)) {
+		// 	// If the type has an alias, we check if it is an Arrow-Type extension
+		// 	if (SetArrowExtension(root_holder, child, type, context)) {
+		// 		return;
+		// 	}
+		// }
+		// If the type has an alias, we check if it is an Arrow-Type extension
+		if (SetArrowExtension(root_holder, child, type, context)) {
+			return;
 		}
 	}
 	switch (type.id()) {

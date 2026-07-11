@@ -1,0 +1,35 @@
+# name: test/sql/storage/attach_index_expressions.test
+# description:
+# group: [sqlite_storage]
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'data/db/sakila.db' AS s (TYPE SQLITE, READ_ONLY)
+
+query I
+SELECT expressions FROM duckdb_indexes() WHERE index_name='idx_actor_last_name';
+----
+[last_name]
+
+statement ok
+ATTACH '__TEST_DIR__/sakila.duckdb' AS sakila_duck;
+
+statement ok
+COPY FROM DATABASE s TO sakila_duck
+
+query IIII
+SELECT * FROM sakila_duck.store WHERE manager_staff_id=2;
+----
+2	2	2	2021-03-06 15:52:00
+
+statement ok
+DETACH sakila_duck;
+
+statement ok
+ATTACH '__TEST_DIR__/sakila.duckdb' AS sakila_duck;
+
+query IIII
+SELECT * FROM sakila_duck.store WHERE manager_staff_id=2;
+----
+2	2	2	2021-03-06 15:52:00

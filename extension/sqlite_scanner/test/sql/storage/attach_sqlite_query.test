@@ -1,0 +1,56 @@
+# name: test/sql/storage/attach_sqlite_query.test
+# description:
+# group: [sqlite_storage]
+
+require sqlite_scanner
+
+statement ok
+ATTACH '__TEST_DIR__/sqlite_query_test.db' AS s (TYPE SQLITE)
+
+query I
+SELECT * FROM sqlite_query(s, 'SELECT 42 a')
+----
+42
+
+query I
+SELECT * FROM sqlite_query(s, 'SELECT unixepoch(''1992-01-01'') a')
+----
+694224000
+
+statement ok
+CREATE OR REPLACE TABLE s.tbl AS SELECT * FROM range(10000) t(r);
+
+query I
+SELECT SUM(r) FROM s.tbl;
+----
+49995000
+
+query I
+SELECT SUM(r::INT) FROM sqlite_query(s, 'SELECT * FROM tbl')
+----
+49995000
+
+statement ok
+ATTACH 'data/db/sakila.db' AS sakila (TYPE SQLITE, READ_ONLY)
+
+query II
+SELECT last_name, first_name FROM sqlite_query(sakila, 'SELECT * FROM actor WHERE last_name=''GUINESS''') ORDER BY ALL
+----
+GUINESS	ED
+GUINESS	PENELOPE
+GUINESS	SEAN
+
+statement error
+SELECT * FROM sqlite_query(s, '')
+----
+Failed to prepare
+
+statement error
+SELECT * FROM sqlite_query(s, 'SELEC 42')
+----
+Failed to prepare
+
+statement error
+SELECT * FROM sqlite_query(s, 'CREATE TABLE my_table(a,b,c)')
+----
+query must return data

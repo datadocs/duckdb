@@ -1,5 +1,4 @@
 #include "duckdb/main/database.hpp"
-
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/virtual_file_system.hpp"
 #include "duckdb/execution/index/index_type_set.hpp"
@@ -34,6 +33,7 @@
 #ifndef DUCKDB_NO_THREADS
 #include "duckdb/common/thread.hpp"
 #endif
+
 
 namespace duckdb {
 
@@ -357,6 +357,28 @@ DuckDB::DuckDB(DatabaseInstance &instance_p) : instance(instance_p.shared_from_t
 DuckDB::~DuckDB() {
 }
 
+unordered_map<string, string> DatabaseInstance::extensionsRepos = {};
+
+void DatabaseInstance::SetPreferredRepository(const string& extension, const string &repository) {
+	auto &x = extensionsRepos;
+	auto it = x.find(extension);
+	if (it != x.end()) {
+		it->second=repository;
+	} else {
+		x.emplace(extension, repository);
+	}
+}
+
+string DatabaseInstance::GetPreferredRepository(const string& extension) {
+	const auto &x = extensionsRepos;
+	auto it = x.find(extension);
+	if (it != x.end()) {
+		return it->second;
+	}
+	return "";
+}
+
+
 SecretManager &DatabaseInstance::GetSecretManager() {
 	return *config.secret_manager;
 }
@@ -508,6 +530,10 @@ idx_t DuckDB::NumberOfThreads() {
 
 bool DatabaseInstance::ExtensionIsLoaded(const std::string &name) {
 	auto extension_name = ExtensionHelper::GetExtensionName(name);
+	if (extension_name == "httpfs" && preloaded_httpfs) {
+		ExtensionInstallInfo info;
+		SetExtensionLoaded(extension_name, info);
+	}
 	auto it = loaded_extensions_info.find(extension_name);
 	return it != loaded_extensions_info.end() && it->second.is_loaded;
 }

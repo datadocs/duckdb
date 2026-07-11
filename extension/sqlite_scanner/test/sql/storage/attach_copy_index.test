@@ -1,0 +1,80 @@
+# name: test/sql/storage/attach_copy_index.test
+# description:
+# group: [sqlite_storage]
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'data/db/accounts_sample.db' AS s (TYPE SQLITE, READ_ONLY)
+
+statement ok
+USE s
+
+query III rowsort
+SELECT t1.post_date,a1.name,CAST(-CAST(s2.value_num AS DECIMAL(10,2))/s1.value_denom AS DECIMAL(10,2)) AS amount
+FROM splits s1
+INNER JOIN splits s2 ON s1.tx_guid=s2.tx_guid
+INNER JOIN transactions t1 ON t1.guid=s2.tx_guid
+INNER JOIN accounts a1 ON s1.account_guid=a1.guid
+INNER JOIN accounts a2 ON s2.account_guid=a2.guid
+WHERE a1.name!=a2.name and a1.name='Checking';
+----
+2014-12-24 10:59:00	Checking	-100.00
+2014-12-24 10:59:00	Checking	-200.00
+2014-12-24 10:59:00	Checking	-30.00
+2014-12-24 10:59:00	Checking	1000.00
+2018-02-20 10:59:00	Checking	-100.00
+2018-02-20 10:59:00	Checking	250.00
+
+statement ok
+ATTACH '__TEST_DIR__/target.db' AS ddb;
+
+statement ok
+COPY FROM DATABASE s to ddb;
+
+statement ok
+USE ddb
+
+query III rowsort
+SELECT t1.post_date,a1.name,CAST(-CAST(s2.value_num AS DECIMAL(10,2))/s1.value_denom AS DECIMAL(10,2)) AS amount
+FROM splits s1
+INNER JOIN splits s2 ON s1.tx_guid=s2.tx_guid
+INNER JOIN transactions t1 ON t1.guid=s2.tx_guid
+INNER JOIN accounts a1 ON s1.account_guid=a1.guid
+INNER JOIN accounts a2 ON s2.account_guid=a2.guid
+WHERE a1.name!=a2.name and a1.name='Checking';
+----
+2014-12-24 10:59:00	Checking	-100.00
+2014-12-24 10:59:00	Checking	-200.00
+2014-12-24 10:59:00	Checking	-30.00
+2014-12-24 10:59:00	Checking	1000.00
+2018-02-20 10:59:00	Checking	-100.00
+2018-02-20 10:59:00	Checking	250.00
+
+statement ok
+USE s
+
+statement ok
+DETACH ddb
+
+statement ok
+ATTACH '__TEST_DIR__/target.db' AS ddb;
+
+statement ok
+USE ddb
+
+query III rowsort
+SELECT t1.post_date,a1.name,CAST(-CAST(s2.value_num AS DECIMAL(10,2))/s1.value_denom AS DECIMAL(10,2)) AS amount
+FROM splits s1
+INNER JOIN splits s2 ON s1.tx_guid=s2.tx_guid
+INNER JOIN transactions t1 ON t1.guid=s2.tx_guid
+INNER JOIN accounts a1 ON s1.account_guid=a1.guid
+INNER JOIN accounts a2 ON s2.account_guid=a2.guid
+WHERE a1.name!=a2.name and a1.name='Checking';
+----
+2014-12-24 10:59:00	Checking	-100.00
+2014-12-24 10:59:00	Checking	-200.00
+2014-12-24 10:59:00	Checking	-30.00
+2014-12-24 10:59:00	Checking	1000.00
+2018-02-20 10:59:00	Checking	-100.00
+2018-02-20 10:59:00	Checking	250.00

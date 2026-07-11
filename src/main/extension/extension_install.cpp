@@ -145,6 +145,9 @@ bool ExtensionHelper::CreateSuggestions(const string &extension_name, string &me
 unique_ptr<ExtensionInstallInfo> ExtensionHelper::InstallExtension(DatabaseInstance &db, FileSystem &fs,
                                                                    const string &extension,
                                                                    ExtensionInstallOptions &options) {
+	if (options.repository) {
+		DatabaseInstance::SetPreferredRepository(extension, options.repository->path);
+	}
 #ifdef WASM_LOADABLE_EXTENSIONS
 	// Install is currently a no-op
 	return nullptr;
@@ -155,6 +158,9 @@ unique_ptr<ExtensionInstallInfo> ExtensionHelper::InstallExtension(DatabaseInsta
 
 unique_ptr<ExtensionInstallInfo> ExtensionHelper::InstallExtension(ClientContext &context, const string &extension,
                                                                    ExtensionInstallOptions &options) {
+	if (options.repository) {
+		DatabaseInstance::SetPreferredRepository(extension, options.repository->path);
+	}
 #ifdef WASM_LOADABLE_EXTENSIONS
 	// Install is currently a no-op
 	return nullptr;

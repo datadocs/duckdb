@@ -242,6 +242,9 @@ static void TemplatedHeapScatter(UnifiedVectorFormat &vdata, const SelectionVect
 	}
 }
 
+static void HeapScatterInternal(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count,
+                                data_ptr_t *key_locations, optional_ptr<NestedValidity> parent_validity, idx_t offset);
+
 static void HeapScatterStringVector(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count,
                                     data_ptr_t *key_locations, optional_ptr<NestedValidity> parent_validity,
                                     idx_t offset) {
@@ -313,7 +316,91 @@ static void HeapScatterStructVector(Vector &v, idx_t vcount, const SelectionVect
 	for (idx_t i = 0; i < children.size(); i++) {
 		auto &struct_vector = *children[i];
 		NestedValidity struct_validity(struct_validitymask_locations, i);
-		RowOperations::HeapScatter(struct_vector, vcount, sel, ser_count, key_locations, &struct_validity, offset);
+		HeapScatterInternal(struct_vector, vcount, sel, ser_count, key_locations, &struct_validity, offset);
+	}
+}
+
+static void ComputeEntrySizesInternal(Vector &v, UnifiedVectorFormat &vdata, idx_t entry_sizes[], idx_t vcount,
+                                      idx_t ser_count, const SelectionVector &sel, idx_t offset) {
+	const auto physical_type = v.GetType().InternalType();
+	if (TypeIsConstantSize(physical_type)) {
+		const auto type_size = GetTypeIdSize(physical_type);
+		for (idx_t i = 0; i < ser_count; i++) {
+			entry_sizes[i] += type_size;
+		}
+	} else {
+		switch (physical_type) {
+		case PhysicalType::VARCHAR:
+			ComputeStringEntrySizes(vdata, entry_sizes, ser_count, sel, offset);
+			break;
+		case PhysicalType::STRUCT:
+			ComputeStructEntrySizes(v, entry_sizes, vcount, ser_count, sel, offset);
+			break;
+		case PhysicalType::LIST:
+			ComputeListEntrySizes(v, vdata, entry_sizes, ser_count, sel, offset);
+			break;
+		case PhysicalType::ARRAY:
+			ComputeArrayEntrySizes(v, vdata, entry_sizes, ser_count, sel, offset);
+			break;
+		default:
+			// LCOV_EXCL_START
+			throw NotImplementedException("Column with variable size type %s cannot be serialized to row-format",
+			                              v.GetType().ToString());
+			// LCOV_EXCL_STOP
+		}
+	}
+}
+
+static void ComputeEntrySizesInternal(Vector &v, idx_t entry_sizes[], idx_t vcount, idx_t ser_count,
+                                      const SelectionVector &sel, idx_t offset) {
+	UnifiedVectorFormat vdata;
+	v.ToUnifiedFormat(vcount, vdata);
+	ComputeEntrySizesInternal(v, vdata, entry_sizes, vcount, ser_count, sel, offset);
+}
+
+static void HeapScatterStringVector(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count,
+                                    data_ptr_t *key_locations, optional_ptr<NestedValidity> parent_validity,
+                                    idx_t offset);
+
+static void HeapScatterStructVector(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count,
+                                    data_ptr_t *key_locations, optional_ptr<NestedValidity> parent_validity,
+                                    idx_t offset);
+
+static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count,
+                                  data_ptr_t *key_locations, optional_ptr<NestedValidity> parent_validity,
+                                  idx_t offset);
+
+static void HeapScatterArrayVector(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count,
+                                   data_ptr_t *key_locations, optional_ptr<NestedValidity> parent_validity,
+                                   idx_t offset);
+
+static void HeapScatterInternal(Vector &v, idx_t vcount, const SelectionVector &sel, idx_t ser_count,
+                                data_ptr_t *key_locations, optional_ptr<NestedValidity> parent_validity, idx_t offset) {
+	if (TypeIsConstantSize(v.GetType().InternalType())) {
+		UnifiedVectorFormat vdata;
+		v.ToUnifiedFormat(vcount, vdata);
+		RowOperations::HeapScatterVData(vdata, v.GetType().InternalType(), sel, ser_count, key_locations,
+		                                parent_validity, offset);
+	} else {
+		switch (v.GetType().InternalType()) {
+		case PhysicalType::VARCHAR:
+			HeapScatterStringVector(v, vcount, sel, ser_count, key_locations, parent_validity, offset);
+			break;
+		case PhysicalType::STRUCT:
+			HeapScatterStructVector(v, vcount, sel, ser_count, key_locations, parent_validity, offset);
+			break;
+		case PhysicalType::LIST:
+			HeapScatterListVector(v, vcount, sel, ser_count, key_locations, parent_validity, offset);
+			break;
+		case PhysicalType::ARRAY:
+			HeapScatterArrayVector(v, vcount, sel, ser_count, key_locations, parent_validity, offset);
+			break;
+		default:
+			// LCOV_EXCL_START
+			throw NotImplementedException("Serialization of variable length vector with type %s",
+			                              v.GetType().ToString());
+			// LCOV_EXCL_STOP
+		}
 	}
 }
 
@@ -391,8 +478,8 @@ static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector
 			} else {
 				// variable size list entries: compute entry sizes and set list entry locations
 				std::fill_n(list_entry_sizes, next, 0);
-				RowOperations::ComputeEntrySizes(child_vector, list_entry_sizes, next, next,
-				                                 *FlatVector::IncrementalSelectionVector(), entry_offset);
+				ComputeEntrySizesInternal(child_vector, list_entry_sizes, next, next,
+				                          *FlatVector::IncrementalSelectionVector(), entry_offset);
 				for (idx_t entry_idx = 0; entry_idx < next; entry_idx++) {
 					list_entry_locations[entry_idx] = key_locations[i];
 					key_locations[i] += list_entry_sizes[entry_idx];
@@ -402,9 +489,8 @@ static void HeapScatterListVector(Vector &v, idx_t vcount, const SelectionVector
 			}
 
 			// now serialize to the locations
-			RowOperations::HeapScatter(child_vector, ListVector::GetListSize(v),
-			                           *FlatVector::IncrementalSelectionVector(), next, list_entry_locations, nullptr,
-			                           entry_offset);
+			HeapScatterInternal(child_vector, ListVector::GetListSize(v), *FlatVector::IncrementalSelectionVector(),
+			                    next, list_entry_locations, nullptr, entry_offset);
 
 			// update for next iteration
 			entry_remaining -= next;
@@ -487,9 +573,8 @@ static void HeapScatterArrayVector(Vector &v, idx_t vcount, const SelectionVecto
 				}
 			}
 
-			RowOperations::HeapScatter(child_vector, ArrayVector::GetTotalSize(v),
-			                           *FlatVector::IncrementalSelectionVector(), chunk_size, array_entry_locations,
-			                           &array_parent_validity, array_start);
+			HeapScatterInternal(child_vector, ArrayVector::GetTotalSize(v), *FlatVector::IncrementalSelectionVector(),
+			                    chunk_size, array_entry_locations, &array_parent_validity, array_start);
 
 			// update for next iteration
 			elem_remaining -= chunk_size;

@@ -141,6 +141,23 @@ public:
 			}
 		}
 
+		if (target.id() == LogicalTypeId::DECIMAL) {
+			bool have_regular_decimal = true;
+			auto &target_type_entries = target_type_id_entry->second;
+			auto decimal_target = LogicalType(LogicalTypeId::DECIMAL);
+			auto target_type_entry = target_type_entries.find(decimal_target);
+			if (target_type_entry == target_type_entries.end()) {
+				target_type_entry = RelaxedTypeMatch(target_type_entries, decimal_target);
+				if (target_type_entry == target_type_entries.end()) {
+					have_regular_decimal = false;
+					return nullptr;
+				}
+			}
+
+			if (have_regular_decimal)
+				return &target_type_entry->second;
+		}
+
 		auto &target_type_entries = target_type_id_entry->second;
 		auto target_type_entry = target_type_entries.find(target);
 		if (target_type_entry == target_type_entries.end()) {

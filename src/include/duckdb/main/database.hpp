@@ -17,6 +17,9 @@
 #include "duckdb/main/valid_checker.hpp"
 
 namespace duckdb {
+
+extern bool preloaded_httpfs;
+
 class BufferManager;
 class DatabaseManager;
 class StorageManager;
@@ -100,6 +103,11 @@ private:
 	unique_ptr<ExternalFileCache> external_file_cache;
 
 	duckdb_ext_api_v1 (*create_api_v1)();
+
+public:
+       static void SetPreferredRepository(const string& extension, const string &repository);
+       static string GetPreferredRepository(const string& extension);
+       static unordered_map<string, string> extensionsRepos;
 };
 
 //! The database object. This object holds the catalog and all the

@@ -346,7 +346,6 @@ vector<ExtensionUpdateResult> ExtensionHelper::UpdateExtensions(ClientContext &c
 	vector<ExtensionUpdateResult> result;
 	DatabaseInstance &db = DatabaseInstance::GetDatabase(context);
 
-#ifndef WASM_LOADABLE_EXTENSIONS
 	case_insensitive_set_t seen_extensions;
 
 	// scan the install directory for installed extensions
@@ -363,7 +362,6 @@ vector<ExtensionUpdateResult> ExtensionHelper::UpdateExtensions(ClientContext &c
 
 		result.push_back(UpdateExtensionInternal(context, db, fs, fs.JoinPath(ext_directory, path), extension_name));
 	});
-#endif
 
 	return result;
 }

@@ -195,7 +195,9 @@ BoundStatement Binder::BindCopyTo(CopyStatement &stmt, CopyToType copy_to_type) 
 		}
 	}
 	bool is_remote_file = FileSystem::IsRemoteFile(stmt.info->file_path);
-	if (is_remote_file) {
+	if ( is_remote_file ) {
+		use_tmp_file = false;
+	} else if( context.db->config.options.use_direct_io ) {
 		use_tmp_file = false;
 	} else {
 		auto &fs = FileSystem::GetFileSystem(context);

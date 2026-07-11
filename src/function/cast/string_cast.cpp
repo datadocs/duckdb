@@ -22,8 +22,10 @@ bool StringEnumCastLoop(const string_t *source_data, ValidityMask &source_mask, 
 		if (source_mask.RowIsValid(source_idx)) {
 			auto pos = EnumType::GetPos(result_type, source_data[source_idx]);
 			if (pos == -1) {
+
 				result_data[i] = HandleVectorCastError::Operation<T>(
-				    CastExceptionText<string_t, T>(source_data[source_idx]), result_mask, i, vector_cast_data);
+				    CastExceptionText<string_t>(source_data[source_idx], TypeIdInfo::CreateObject<T>), result_mask, i,
+				    vector_cast_data);
 			} else {
 				result_data[i] = UnsafeNumericCast<T>(pos);
 			}

@@ -7,7 +7,7 @@
 
 namespace duckdb {
 
-#ifndef DUCKDB_SMALLER_BINARY
+#ifndef DUCKDB_SMALLER_BINARY_NO_SELECT
 struct BothInclusiveBetweenOperator {
 	template <class T>
 	static inline bool Operation(T input, T lower, T upper) {
@@ -133,8 +133,8 @@ void ExpressionExecutor::Execute(const BoundBetweenExpression &expr, ExpressionS
 
 idx_t ExpressionExecutor::Select(const BoundBetweenExpression &expr, ExpressionState *state, const SelectionVector *sel,
                                  idx_t count, SelectionVector *true_sel, SelectionVector *false_sel) {
-#ifdef DUCKDB_SMALLER_BINARY
-	throw InternalException("ExpressionExecutor::Select not available with DUCKDB_SMALLER_BINARY");
+#ifdef DUCKDB_SMALLER_BINARY_NO_SELECT
+	throw InternalException("ExpressionExecutor::Select not available with DUCKDB_SMALLER_BINARY_NO_SELECT");
 #else
 	// resolve the children
 	Vector input(state->intermediate_chunk.data[0]);
