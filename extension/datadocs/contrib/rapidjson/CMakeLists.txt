@@ -1,7 +1,7 @@
 # usage:
 #	target_link_libraries(xxx rapidjson)
 
-cmake_minimum_required(VERSION 3.6)
+cmake_minimum_required(VERSION 3.25)
 project(rapidjson)
 
 include(ExternalProject)

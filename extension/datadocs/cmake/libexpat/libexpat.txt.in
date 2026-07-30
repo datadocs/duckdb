@@ -6,7 +6,7 @@
 # target_include_directories(<your_target> PRIVATE $<TARGET_PROPERTY:expat,INTERFACE_INCLUDE_DIRECTORIES>)
 # target_link_libraries(<your_target> PUBLIC expat)
 
-cmake_minimum_required(VERSION 3.6)
+cmake_minimum_required(VERSION 3.25)
 
 project(libexpat-download)
 

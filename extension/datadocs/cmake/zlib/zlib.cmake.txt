@@ -4,7 +4,7 @@
 # GAB: this file (and its companions cmake files) have been copied from the upstream repository
 # with additional modifications marked by # GAB comments
 
-cmake_minimum_required(VERSION 3.6)
+cmake_minimum_required(VERSION 3.25)
 set(CMAKE_ALLOW_LOOSE_LOOP_CONSTRUCTS ON)
 
 project(zlib C)
